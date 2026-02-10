@@ -1,0 +1,43 @@
+# Phase 1 Revenue Scaffold
+
+## Purpose
+This scaffold introduces a feature-flagged revenue automation runtime contract and provider abstraction without changing release-gate control-plane behavior.
+
+## Non-goals
+1. No changes to release-gate semantics.
+2. No schema default changes for release summaries.
+3. No live external HTTP execution in safe scaffold mode.
+
+## Runtime Entry
+Run locally:
+
+```powershell
+pwsh -File apps/revenue_automation/src/index.ps1 -ConfigPath apps/revenue_automation/config.example.json -TaskPath <task-envelope.json>
+```
+
+## Safety Model
+1. `enable_revenue_automation` is `false` by default.
+2. `safe_mode=true` prevents HTTP provider execution.
+3. `dry_run=true` avoids live side-effect execution paths.
+4. Telemetry writing is best-effort and non-fatal.
+
+## Input Contract
+Task envelope JSON fields:
+1. `task_id` (string)
+2. `task_type` (string)
+3. `payload` (object)
+4. `created_at_utc` (ISO8601 string)
+
+## Output Contract
+Result JSON fields:
+1. `task_id`
+2. `status` (`SUCCESS|FAILED|SKIPPED`)
+3. `provider_used`
+4. `started_at_utc`
+5. `finished_at_utc`
+6. `duration_ms`
+7. `error` (nullable)
+8. `artifacts` (array of strings)
+
+## Independence Note
+This scaffold is independent from the release-gate control plane and is additive only.

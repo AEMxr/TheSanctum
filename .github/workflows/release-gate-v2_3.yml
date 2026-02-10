@@ -4,8 +4,10 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "apps/revenue_automation/**"
       - "scripts/**"
       - "tests/**"
+      - "docs/phase1_revenue_scaffold.md"
       - "docs/release_promotion_checklist.md"
       - "docs/schema_compatibility_policy.md"
       - ".github/workflows/release-gate-v2_3.yml"
@@ -142,6 +144,12 @@ jobs:
               throw "Pester failures in $($spec.Path): $($result.FailedCount)"
             }
           }
+
+      - name: Revenue scaffold smoke (non-gating)
+        shell: ${{ matrix.lane.shell }}
+        continue-on-error: true
+        run: |
+          Invoke-Pester apps/revenue_automation/tests/revenue_automation.smoke.Tests.ps1 -EnableExit
 
       - name: Verify evidence artifacts
         shell: ${{ matrix.lane.shell }}
