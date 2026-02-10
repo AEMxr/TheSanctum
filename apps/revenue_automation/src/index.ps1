@@ -175,6 +175,7 @@ $result = [pscustomobject]@{
   artifacts = @($routeResult.artifacts | ForEach-Object { [string]$_ })
   reason_codes = if ($routeResult.PSObject.Properties.Name -contains "reason_codes") { @($routeResult.reason_codes | ForEach-Object { [string]$_ }) } else { @() }
   route = if ($routeResult.PSObject.Properties.Name -contains "route") { $routeResult.route } else { $null }
+  offer = if ($routeResult.PSObject.Properties.Name -contains "offer") { $routeResult.offer } else { $null }
 }
 
 if ($config.emit_telemetry) {

@@ -268,6 +268,79 @@ function Get-DeterministicLeadRouting {
   }
 }
 
+function Get-DeterministicOfferFromRouting {
+  param([Parameter(Mandatory = $true)][object]$Routing)
+
+  # Deterministic mapping from selected route to sellable tier/package.
+  $tier = "free"
+  $monthlyPrice = 0
+  $setupFee = 0
+  $slaHours = 72
+  $offerReason = "offer_free_low_signal"
+
+  $selectedRoute = ([string]$Routing.selected_route).Trim().ToLowerInvariant()
+  switch ($selectedRoute) {
+    "priority_outreach" {
+      $tier = "pro"
+      $monthlyPrice = 999
+      $setupFee = 499
+      $slaHours = 24
+      $offerReason = "offer_pro_priority"
+    }
+    "nurture_sequence" {
+      $tier = "starter"
+      $monthlyPrice = 299
+      $setupFee = 149
+      $slaHours = 48
+      $offerReason = "offer_starter_nurture"
+    }
+    default {
+      $tier = "free"
+      $monthlyPrice = 0
+      $setupFee = 0
+      $slaHours = 72
+      $offerReason = "offer_free_low_signal"
+    }
+  }
+
+  $reasonCodes = New-Object System.Collections.Generic.List[string]
+  [void]$reasonCodes.Add($offerReason)
+
+  $allowedTiers = @("free", "starter", "pro")
+  $monthlyCap = 5000
+  $setupCap = 2500
+
+  $guardrailViolation = $false
+  if ($allowedTiers -notcontains $tier) { $guardrailViolation = $true }
+  if ($monthlyPrice -lt 0 -or $setupFee -lt 0) { $guardrailViolation = $true }
+  if ($monthlyPrice -gt $monthlyCap -or $setupFee -gt $setupCap) { $guardrailViolation = $true }
+
+  if ($guardrailViolation) {
+    $tier = "free"
+    $monthlyPrice = 0
+    $setupFee = 0
+    $slaHours = 72
+    [void]$reasonCodes.Add("price_guardrail_applied")
+  }
+
+  $topLeadId = "lead-unknown"
+  if ($Routing.PSObject.Properties.Name -contains "ranked_leads") {
+    $rankedLeads = @($Routing.ranked_leads)
+    if ($rankedLeads.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$rankedLeads[0].lead_id)) {
+      $topLeadId = [string]$rankedLeads[0].lead_id
+    }
+  }
+
+  return [pscustomobject]@{
+    offer_id = ("offer-{0}-{1}-{2}" -f $tier, $selectedRoute, $topLeadId)
+    tier = $tier
+    monthly_price_usd = [int]$monthlyPrice
+    setup_fee_usd = [int]$setupFee
+    sla_hours = [int]$slaHours
+    reason_codes = @($reasonCodes | Select-Object -Unique)
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -288,6 +361,7 @@ function Invoke-RevenueTaskRoute {
       error = "Unsupported task_type: $taskType"
       artifacts = @()
       route = $null
+      offer = $null
       reason_codes = @()
     }
   }
@@ -306,6 +380,7 @@ function Invoke-RevenueTaskRoute {
           reason_codes = @()
           ranked_leads = @()
         }
+        offer = $null
         reason_codes = @()
       }
     }
@@ -327,9 +402,15 @@ function Invoke-RevenueTaskRoute {
         error = "Unsupported provider_mode: $providerMode"
         artifacts = @()
         route = $null
+        offer = $null
         reason_codes = @()
       }
     }
+  }
+
+  $offer = $null
+  if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
+    $offer = Get-DeterministicOfferFromRouting -Routing $routing
   }
 
   return [pscustomobject]@{
@@ -347,6 +428,7 @@ function Invoke-RevenueTaskRoute {
     else {
       $null
     }
+    offer = $offer
     reason_codes = if ($null -ne $routing) { @($routing.reason_codes | ForEach-Object { [string]$_ }) } else { @() }
   }
 }

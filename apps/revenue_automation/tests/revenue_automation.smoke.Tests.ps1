@@ -258,7 +258,8 @@ Describe "revenue automation scaffold smoke" {
         "finished_at_utc",
         "duration_ms",
         "error",
-        "artifacts"
+        "artifacts",
+        "offer"
       )
 
       foreach ($field in $requiredFields) {
@@ -350,6 +351,13 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([string]$run1.result.route.selected_route) -Expected "priority_outreach" -Message "Expected priority_outreach selected route."
       Assert-Contains -Collection @($run1.result.reason_codes) -Value "high_priority_score" -Message "Expected high_priority_score reason code."
       Assert-Contains -Collection @($run1.result.route.reason_codes) -Value "fit_segment" -Message "Expected fit_segment reason code."
+      Assert-True -Condition ($null -ne $run1.result.offer) -Message "High-priority lead_enrich should emit offer."
+      Assert-Equal -Actual ([string]$run1.result.offer.tier) -Expected "pro" -Message "High-priority route should map to pro offer."
+      Assert-Contains -Collection @($run1.result.offer.reason_codes) -Value "offer_pro_priority" -Message "Pro offer should include deterministic reason code."
+
+      $offerJson1 = ($run1.result.offer | ConvertTo-Json -Depth 20 -Compress)
+      $offerJson2 = ($run2.result.offer | ConvertTo-Json -Depth 20 -Compress)
+      Assert-Equal -Actual $offerJson1 -Expected $offerJson2 -Message "Offer payload must remain deterministic across repeated runs."
     }
 
     It "uses lead_id ascending tie-break when scores are equal" {
@@ -379,6 +387,62 @@ Describe "revenue automation scaffold smoke" {
 
       $ordered = @($run.result.route.ranked_leads | ForEach-Object { [string]$_.lead_id })
       Assert-Equal -Actual ($ordered -join ",") -Expected "lead-a,lead-b,lead-c" -Message "Tie-break ordering must use lead_id ascending."
+    }
+
+    It "returns starter offer for medium-priority route" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-medium"; segment = "b2b" }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Medium-priority route should exit 0."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Medium-priority route should return SUCCESS."
+      Assert-Equal -Actual ([string]$run.result.route.selected_route) -Expected "nurture_sequence" -Message "Expected nurture_sequence route."
+      Assert-True -Condition ($null -ne $run.result.offer) -Message "Medium-priority route should emit offer."
+      Assert-Equal -Actual ([string]$run.result.offer.tier) -Expected "starter" -Message "Medium-priority route should map to starter offer."
+      Assert-Contains -Collection @($run.result.offer.reason_codes) -Value "offer_starter_nurture" -Message "Starter offer should include deterministic reason code."
+    }
+
+    It "returns free offer for low-priority route" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-low" }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Low-priority route should exit 0."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Low-priority route should return SUCCESS."
+      Assert-Equal -Actual ([string]$run.result.route.selected_route) -Expected "qualify_later" -Message "Expected qualify_later route."
+      Assert-True -Condition ($null -ne $run.result.offer) -Message "Low-priority route should emit offer."
+      Assert-Equal -Actual ([string]$run.result.offer.tier) -Expected "free" -Message "Low-priority route should map to free offer."
+      Assert-Contains -Collection @($run.result.offer.reason_codes) -Value "offer_free_low_signal" -Message "Free offer should include deterministic reason code."
     }
 
     It "returns FAILED for malformed payload.leads" {
