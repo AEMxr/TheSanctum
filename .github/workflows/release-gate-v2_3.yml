@@ -2,6 +2,12 @@ name: release-gate-v2_3
 
 on:
   workflow_dispatch:
+    inputs:
+      task_file:
+        description: "Task card path for scope validation"
+        required: false
+        default: "docs/tasks/TASK-CP-002.md"
+        type: string
   pull_request:
     paths:
       - "apps/revenue_automation/**"
@@ -27,6 +33,66 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enforce task scope before tests
+        shell: ${{ matrix.lane.shell }}
+        env:
+          TASK_FILE_INPUT: ${{ github.event.inputs.task_file }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          $taskFile = if (-not [string]::IsNullOrWhiteSpace($env:TASK_FILE_INPUT)) { $env:TASK_FILE_INPUT } else { "docs/tasks/TASK-CP-002.md" }
+
+          $changedFiles = @()
+          if ($env:GITHUB_EVENT_NAME -eq "pull_request" -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_BASE_REF)) {
+            git fetch --no-tags --prune origin $env:GITHUB_BASE_REF
+            $baseRef = "origin/$($env:GITHUB_BASE_REF)"
+            $mergeBase = (git merge-base HEAD $baseRef | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace([string]$mergeBase)) {
+              throw "Unable to determine merge base for scope validation."
+            }
+            $changedFiles = @(git diff --name-only $mergeBase HEAD)
+          }
+          else {
+            $hasParent = $true
+            try {
+              [void](git rev-parse --verify HEAD~1 2>$null)
+            }
+            catch {
+              $hasParent = $false
+            }
+
+            if ($hasParent) {
+              $changedFiles = @(git diff --name-only HEAD~1 HEAD)
+            }
+            else {
+              $changedFiles = @(git ls-files)
+            }
+          }
+
+          $changedFiles = @(
+            $changedFiles |
+              ForEach-Object { ([string]$_).Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              Sort-Object -Unique
+          )
+
+          if ([string]::IsNullOrWhiteSpace($env:TASK_FILE_INPUT)) {
+            $taskCards = @($changedFiles | Where-Object { $_ -match '^docs/tasks/TASK-[^/]+\.md$' } | Sort-Object)
+            if ($taskCards.Count -gt 0) {
+              $taskFile = $taskCards[0]
+            }
+          }
+
+          Write-Host "Scope validation task file: $taskFile"
+          Write-Host "Scope validation changed file count: $($changedFiles.Count)"
+
+          if ($changedFiles.Count -eq 0) {
+            Write-Host "No changed files detected; skipping scope enforcement."
+            exit 0
+          }
+
+          & .\scripts\dev\validate_task_scope.ps1 -TaskFile $taskFile -ChangedFiles $changedFiles
 
       - name: Setup PowerShell modules
         shell: ${{ matrix.lane.shell }}
@@ -212,6 +278,66 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enforce task scope before tests
+        shell: ${{ matrix.lane.shell }}
+        env:
+          TASK_FILE_INPUT: ${{ github.event.inputs.task_file }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          $taskFile = if (-not [string]::IsNullOrWhiteSpace($env:TASK_FILE_INPUT)) { $env:TASK_FILE_INPUT } else { "docs/tasks/TASK-CP-002.md" }
+
+          $changedFiles = @()
+          if ($env:GITHUB_EVENT_NAME -eq "pull_request" -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_BASE_REF)) {
+            git fetch --no-tags --prune origin $env:GITHUB_BASE_REF
+            $baseRef = "origin/$($env:GITHUB_BASE_REF)"
+            $mergeBase = (git merge-base HEAD $baseRef | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace([string]$mergeBase)) {
+              throw "Unable to determine merge base for scope validation."
+            }
+            $changedFiles = @(git diff --name-only $mergeBase HEAD)
+          }
+          else {
+            $hasParent = $true
+            try {
+              [void](git rev-parse --verify HEAD~1 2>$null)
+            }
+            catch {
+              $hasParent = $false
+            }
+
+            if ($hasParent) {
+              $changedFiles = @(git diff --name-only HEAD~1 HEAD)
+            }
+            else {
+              $changedFiles = @(git ls-files)
+            }
+          }
+
+          $changedFiles = @(
+            $changedFiles |
+              ForEach-Object { ([string]$_).Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              Sort-Object -Unique
+          )
+
+          if ([string]::IsNullOrWhiteSpace($env:TASK_FILE_INPUT)) {
+            $taskCards = @($changedFiles | Where-Object { $_ -match '^docs/tasks/TASK-[^/]+\.md$' } | Sort-Object)
+            if ($taskCards.Count -gt 0) {
+              $taskFile = $taskCards[0]
+            }
+          }
+
+          Write-Host "Scope validation task file: $taskFile"
+          Write-Host "Scope validation changed file count: $($changedFiles.Count)"
+
+          if ($changedFiles.Count -eq 0) {
+            Write-Host "No changed files detected; skipping scope enforcement."
+            exit 0
+          }
+
+          & .\scripts\dev\validate_task_scope.ps1 -TaskFile $taskFile -ChangedFiles $changedFiles
 
       - name: Run intentional blocked scenario
         shell: ${{ matrix.lane.shell }}

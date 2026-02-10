@@ -7,3 +7,4 @@
 - [ ] Docs updated
 - [ ] Rollback anchor recorded
 - [ ] Session log updated with next first command
+- [ ] CI scope validator passed (task file + changed files)
