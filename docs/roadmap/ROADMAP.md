@@ -34,6 +34,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 3. `docs/runtime/RUNTIME_BUDGETS_GTX1660.md` and `docs/runtime/INFERENCE_FALLBACK_POLICY.md` define enforceable local runtime limits and approved fallback/reversion controls.
 4. `docs/security/SECURITY_DRILL_CALENDAR.md` and `docs/security/INCIDENT_RESPONSE_RUNBOOK.md` define recurring resilience drills, recovery targets, and incident-response execution standards.
 5. Policy mutation lifecycle verification is a release hard gate for governance-affecting changes.
+6. `docs/audit/AUDIT_CHAIN_SEAL_RLS002_to_RV001.md` seals deterministic chain evidence for TASK-RLS-002 through TASK-RV-001.
 
 ## Current Sequence Anchor
 `TASK-RLS-002` establishes normalized execution and reporting semantics before subsequent governance, ops, and revenue card execution.
