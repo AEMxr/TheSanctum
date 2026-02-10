@@ -2,8 +2,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $taskRouterScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
-. (Join-Path $taskRouterScriptRoot "mock_provider.ps1")
-. (Join-Path $taskRouterScriptRoot "http_provider.ps1")
+. (Join-Path $taskRouterScriptRoot "providers\mock_provider.ps1")
+. (Join-Path $taskRouterScriptRoot "providers\http_provider.ps1")
 
 function Invoke-RevenueTaskRoute {
   param(
