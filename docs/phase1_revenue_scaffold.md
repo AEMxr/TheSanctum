@@ -15,11 +15,21 @@ Run locally:
 pwsh -File apps/revenue_automation/src/index.ps1 -ConfigPath apps/revenue_automation/config.example.json -TaskPath <task-envelope.json>
 ```
 
+## Deterministic Fixture Replay
+Replay the fixture pack through the runtime contract:
+
+```powershell
+pwsh -File apps/revenue_automation/scripts/replay_fixtures.ps1 -ConfigPath apps/revenue_automation/config.example.json -FixturesDir apps/revenue_automation/fixtures
+```
+
+Fixture replay writes a summary JSON to `apps/revenue_automation/artifacts/replay/replay_summary.json` by default and exits non-zero if any fixture fails contract or expected status checks.
+
 ## Safety Model
 1. `enable_revenue_automation` is `false` by default.
 2. `safe_mode=true` prevents HTTP provider execution.
 3. `dry_run=true` avoids live side-effect execution paths.
 4. Telemetry writing is best-effort and non-fatal.
+5. Fixture replay always enforces `safe_mode=true` and `dry_run=true` at runtime.
 
 ## Input Contract
 Task envelope JSON fields:

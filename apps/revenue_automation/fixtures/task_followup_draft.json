@@ -1,0 +1,9 @@
+﻿{
+  "task_id": "fixture-followup-draft-001",
+  "task_type": "followup_draft",
+  "payload": {
+    "lead_id": "lead-002",
+    "intent": "demo-request"
+  },
+  "created_at_utc": "2026-02-10T00:01:00Z"
+}

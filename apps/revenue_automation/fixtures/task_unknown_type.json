@@ -1,0 +1,8 @@
+﻿{
+  "task_id": "fixture-unknown-001",
+  "task_type": "unknown_task_type",
+  "payload": {
+    "lead_id": "lead-004"
+  },
+  "created_at_utc": "2026-02-10T00:03:00Z"
+}

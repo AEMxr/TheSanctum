@@ -1,0 +1,9 @@
+﻿{
+  "task_id": "fixture-lead-enrich-001",
+  "task_type": "lead_enrich",
+  "payload": {
+    "lead_id": "lead-001",
+    "email": "lead@example.com"
+  },
+  "created_at_utc": "2026-02-10T00:00:00Z"
+}

@@ -1,0 +1,9 @@
+﻿{
+  "task_id": "fixture-calendar-proposal-001",
+  "task_type": "calendar_proposal",
+  "payload": {
+    "lead_id": "lead-003",
+    "timezone": "UTC"
+  },
+  "created_at_utc": "2026-02-10T00:02:00Z"
+}

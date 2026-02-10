@@ -40,7 +40,11 @@ Describe "revenue automation scaffold smoke" {
     $here = Split-Path -Parent $PSCommandPath
     $script:RepoRoot = Resolve-Path (Join-Path $here "..\..\..")
     $script:IndexPath = Join-Path $script:RepoRoot "apps\revenue_automation\src\index.ps1"
+    $script:ReplayPath = Join-Path $script:RepoRoot "apps\revenue_automation\scripts\replay_fixtures.ps1"
+    $script:FixtureDir = Join-Path $script:RepoRoot "apps\revenue_automation\fixtures"
     Assert-True -Condition (Test-Path -Path $script:IndexPath -PathType Leaf) -Message "Missing entrypoint script: $script:IndexPath"
+    Assert-True -Condition (Test-Path -Path $script:ReplayPath -PathType Leaf) -Message "Missing replay script: $script:ReplayPath"
+    Assert-True -Condition (Test-Path -Path $script:FixtureDir -PathType Container) -Message "Missing fixture directory: $script:FixtureDir"
 
     $script:TestTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("revenue_automation_smoke_" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $script:TestTempDir -Force | Out-Null
@@ -222,6 +226,25 @@ Describe "revenue automation scaffold smoke" {
 
       Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.task_id)) -Message "task_id must be non-empty."
       Assert-True -Condition (@($run.result.artifacts).Count -ge 0) -Message "artifacts must be an array."
+    }
+  }
+
+  Context "6) fixture replay runner" {
+    It "replays fixtures deterministically in safe/dry mode" {
+      $replaySummaryPath = Join-Path $script:TestTempDir ("replay_summary_" + [guid]::NewGuid().ToString("N") + ".json")
+
+      $output = & $script:PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $script:ReplayPath -ConfigPath (Join-Path $script:RepoRoot "apps\revenue_automation\config.example.json") -FixturesDir $script:FixtureDir -OutputPath $replaySummaryPath 2>&1
+      $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+
+      Assert-Equal -Actual $exitCode -Expected 0 -Message "Fixture replay should exit 0."
+      Assert-True -Condition (Test-Path -Path $replaySummaryPath -PathType Leaf) -Message "Fixture replay should write summary output."
+
+      $summary = Get-Content -Path $replaySummaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      Assert-Equal -Actual ([string]$summary.provider_mode) -Expected "mock" -Message "Replay should default to mock provider from config."
+      Assert-Equal -Actual ([bool]$summary.safe_mode) -Expected $true -Message "Replay must enforce safe_mode=true."
+      Assert-Equal -Actual ([bool]$summary.dry_run) -Expected $true -Message "Replay must enforce dry_run=true."
+      Assert-Equal -Actual ([int]$summary.failed) -Expected 0 -Message "Fixture replay should not have failed fixtures."
+      Assert-True -Condition (@($summary.results).Count -ge 4) -Message "Fixture replay should include all fixture results."
     }
   }
 }
