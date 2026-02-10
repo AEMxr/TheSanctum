@@ -1,0 +1,38 @@
+﻿[
+    {
+        "test_name":  "NONCE_REPLAY",
+        "endpoint":  "/decisions/confirm-material-action",
+        "status_code":  -1,
+        "expected_error_code":  "NONCE_REPLAY",
+        "actual_error_code":  "",
+        "error":  "Unable to connect to the remote server",
+        "collected_at_utc":  "2026-02-09T08:36:31.7994243Z"
+    },
+    {
+        "test_name":  "NONCE_BINDING_MISMATCH",
+        "endpoint":  "/decisions/confirm-material-action",
+        "status_code":  -1,
+        "expected_error_code":  "NONCE_BINDING_MISMATCH",
+        "actual_error_code":  "",
+        "error":  "Unable to connect to the remote server",
+        "collected_at_utc":  "2026-02-09T08:36:35.8507473Z"
+    },
+    {
+        "test_name":  "CONSENT_EXPIRED",
+        "endpoint":  "/decisions/confirm-material-action",
+        "status_code":  -1,
+        "expected_error_code":  "CONSENT_EXPIRED",
+        "actual_error_code":  "",
+        "error":  "Unable to connect to the remote server",
+        "collected_at_utc":  "2026-02-09T08:36:39.9374994Z"
+    },
+    {
+        "test_name":  "recommendation whitespace rejection",
+        "endpoint":  "/decisions/confirm-material-action",
+        "status_code":  -1,
+        "expected_error_code":  "RECORD_INVALID",
+        "actual_error_code":  "",
+        "error":  "Unable to connect to the remote server",
+        "collected_at_utc":  "2026-02-09T08:36:43.9904753Z"
+    }
+]

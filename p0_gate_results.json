@@ -1,0 +1,39 @@
+﻿{
+    "generated_at_utc":  "2026-02-10T08:13:38.1424089Z",
+    "base_url":  "http://127.0.0.1:1",
+    "user_id":  "c795f2a6-b0b2-45e7-b241-929a71b7a602",
+    "thresholds":  {
+                       "min_boundary_respect_rate":  0.98,
+                       "max_policy_failure_rate":  0.02,
+                       "max_entropy_7d":  1.2,
+                       "max_override_rate_by_domain":  0.3,
+                       "min_onboarding_completion_rate":  0.5,
+                       "max_telemetry_response_ms":  1200
+                   },
+    "warnings":  [
+                     "Preflight failed; gate execution skipped and summary artifact will still be written.",
+                     "Skipping API/DB/Newman/telemetry suites due to preflight block."
+                 ],
+    "hard_failures":  [
+                          "Preflight blocked (see preflight_report.json)"
+                      ],
+    "tests":  [
+
+              ],
+    "passed":  0,
+    "failed":  0,
+    "expected_test_count":  0,
+    "expected_p0_test_count":  0,
+    "expected_telemetry_test_count":  0,
+    "executed_test_count":  0,
+    "gate_status":  "FAIL",
+    "skip_api_tests":  false,
+    "skip_telemetry_gate":  false,
+    "skip_db_checks":  false,
+    "preflight_enabled":  true,
+    "preflight_ran":  true,
+    "preflight_blocked":  true,
+    "preflight_verdict":  "PREFLIGHT_BLOCKED",
+    "preflight_exit_code":  1,
+    "preflight_report_path":  "preflight_report.json"
+}

@@ -1,0 +1,28 @@
+﻿{
+    "generated_at_utc":  "2026-02-10T08:13:38.0925781Z",
+    "base_url":  "http://127.0.0.1:1",
+    "api_health_path":  "/health",
+    "timeout_sec":  30,
+    "psql":  {
+                 "Found":  false,
+                 "Source":  "",
+                 "Version":  ""
+             },
+    "newman":  {
+                   "Found":  false,
+                   "Source":  "",
+                   "Version":  ""
+               },
+    "api_status_code":  -1,
+    "api_status_text":  "",
+    "blockers":  [
+                     "psql not found on PATH: __missing_psql__",
+                     "API health check failed for http://127.0.0.1:1/health: Unable to connect to the remote server"
+                 ],
+    "warnings":  [
+
+                 ],
+    "blocker_count":  2,
+    "warning_count":  0,
+    "verdict":  "PREFLIGHT_BLOCKED"
+}

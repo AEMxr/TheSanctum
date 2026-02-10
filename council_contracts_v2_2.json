@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HG-MoE Council Contracts v2.2",
+  "type": "object",
+  "required": ["role_output_schema", "noura_output_schema"],
+  "properties": {
+    "role_output_schema": {
+      "type": "object",
+      "required": [
+        "role",
+        "position",
+        "confidence",
+        "assumptions",
+        "evidence_refs",
+        "risks",
+        "recommended_action",
+        "policy_checks"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["Engineer", "Economist", "Ethicist", "Strategist", "Arbiter", "Historian"]
+        },
+        "position": {
+          "type": "string",
+          "enum": ["ALLOW", "ALLOW_WITH_CONDITIONS", "BLOCK", "DEFER"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "risks": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "recommended_action": {
+          "type": ["string", "null"]
+        },
+        "policy_checks": {
+          "type": "object",
+          "required": ["boundaries_respected", "non_negotiables_respected", "consent_ok"],
+          "properties": {
+            "boundaries_respected": {"type": "boolean"},
+            "non_negotiables_respected": {"type": "boolean"},
+            "consent_ok": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "failure_mode": {
+          "type": ["string", "null"]
+        },
+        "economic_horizon_assessment": {
+          "type": "object",
+          "required": ["horizon_1y", "horizon_5y", "fragility_score", "incentive_alignment_score"],
+          "properties": {
+            "horizon_1y": {
+              "type": "string",
+              "enum": ["positive", "neutral", "negative", "unknown"]
+            },
+            "horizon_5y": {
+              "type": "string",
+              "enum": ["positive", "neutral", "negative", "unknown"]
+            },
+            "fragility_score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "incentive_alignment_score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {"const": "Economist"}
+            }
+          },
+          "then": {
+            "required": ["economic_horizon_assessment"]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "noura_output_schema": {
+      "type": "object",
+      "required": [
+        "role",
+        "final_position",
+        "final_recommendation",
+        "confidence",
+        "final_assumptions",
+        "final_risks",
+        "contest_path",
+        "requires_approval"
+      ],
+      "properties": {
+        "role": {"type": "string", "const": "Noura"},
+        "final_position": {
+          "type": "string",
+          "enum": ["ALLOW", "ALLOW_WITH_CONDITIONS", "BLOCK", "DEFER"]
+        },
+        "final_recommendation": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "final_assumptions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "final_risks": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "dissent_summary": {"type": ["string", "null"]},
+        "contest_path": {"type": "string"},
+        "requires_approval": {"type": "boolean"},
+        "approved_by_roles": {
+          "type": ["array", "null"],
+          "items": {"type": "string"}
+        },
+        "blocked_by_roles": {
+          "type": ["array", "null"],
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "guardrails": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": [
+        "Reject malformed role output and tag INVALID_ROLE_OUTPUT",
+        "Cap confidence to 0.6 when evidence_refs length < 3",
+        "Append policy_conflict risk when any policy_checks value is false",
+        "Arbiter BLOCK short-circuits synthesis",
+        "If required role set incomplete after validation then return COUNCIL_INCOMPLETE",
+        "Persist raw and validated role outputs for audit"
+      ]
+    },
+    "economist_priority_note": {
+      "type": "string",
+      "default": "Economist is lead-tier (second only to Engineer). Mission: build user skills/knowledge/tools for business creation and operations, optimize for financial freedom and independence, and support consented/policy-permitted platform revenue-share models."
+    }
+  }
+}

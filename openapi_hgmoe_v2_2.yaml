@@ -1,0 +1,982 @@
+openapi: 3.1.0
+info:
+  title: Sanctum HG-MoE v2.2 API
+  version: 0.1.0
+servers:
+  - url: https://api.sanctum.local
+security:
+  - bearerAuth: []
+paths:
+  /events:
+    post:
+      summary: Write immutable event
+      operationId: writeEvent
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventWriteRequest'
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventWriteResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /projection/{user_stable_id}:
+    get:
+      summary: Get role-redacted projection
+      operationId: getProjection
+      parameters:
+        - in: path
+          name: user_stable_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: header
+          name: X-Caller-Node-Id
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - in: header
+          name: X-Caller-Role
+          required: true
+          schema:
+            type: string
+            enum: [primarch, co_primarch, advisor, observer, none]
+      responses:
+        '200':
+          description: Projection snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectionResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /memory:
+    post:
+      summary: Create memory item
+      operationId: createMemory
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryCreateRequest'
+      responses:
+        '201':
+          description: Memory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCreateResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /memory/{id}/supersede:
+    post:
+      summary: Supersede a memory item
+      operationId: supersedeMemory
+      x-idempotency-required: true
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemorySupersedeRequest'
+      responses:
+        '200':
+          description: Superseded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySupersedeResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /decisions/evaluate:
+    post:
+      summary: Run council evaluation and synthesize Noura output
+      operationId: evaluateDecision
+      x-idempotency-required: true
+      description: |
+        HG-MoE guardrails are always enforced:
+        1) strict schema validation per role output (invalid output logged as INVALID_ROLE_OUTPUT)
+        2) confidence cap <= 0.6 when evidence_refs count < 3
+        3) policy conflict propagation when policy_checks contain any false value
+        4) Arbiter BLOCK short-circuits to safe BLOCK response
+        5) persist raw + validated council outputs + synthesized output for audit
+        6) if required lead role set is incomplete after validation, return COUNCIL_INCOMPLETE
+
+        Economist is lead-tier (second only to Engineer). Economist objectives include:
+        business creation/operations capability building, financial freedom and independence,
+        and consented/policy-permitted platform rev-share support.
+        Server-side runtime validation is authoritative for role-schema and guardrail enforcement.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionEvaluateRequest'
+      responses:
+        '200':
+          description: Decision evaluated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionEvaluateResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /consent/nonce/create:
+    post:
+      summary: Create or return active nonce for material action
+      operationId: createConsentNonce
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NonceCreateRequest'
+      responses:
+        '201':
+          description: Nonce created or reused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NonceCreateResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /decisions/confirm-material-action:
+    post:
+      summary: Validate and consume nonce for material action
+      operationId: confirmMaterialAction
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionConfirmRequest'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionConfirmResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /policy/change-ticket:
+    post:
+      summary: Create governance change ticket
+      operationId: createPolicyChangeTicket
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeTicketCreateRequest'
+      responses:
+        '201':
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeTicketCreateResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /policy/apply-change:
+    post:
+      summary: Apply approved governance change
+      operationId: applyPolicyChange
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeApplyRequest'
+      responses:
+        '200':
+          description: Change applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeApplyResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /onboarding/step/1/create-profile:
+    post:
+      summary: Onboarding step 1
+      operationId: onboardingStep1CreateProfile
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingStep1Request'
+      responses:
+        '200':
+          description: Step result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericStepResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /onboarding/step/2/add-boundaries:
+    post:
+      summary: Onboarding step 2
+      operationId: onboardingStep2AddBoundaries
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingStep2Request'
+      responses:
+        '200':
+          description: Step result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericStepResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /onboarding/step/3/create-policy:
+    post:
+      summary: Onboarding step 3
+      operationId: onboardingStep3CreatePolicy
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingStep3Request'
+      responses:
+        '200':
+          description: Step result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericStepResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /onboarding/step/4/create-primarch-node:
+    post:
+      summary: Onboarding step 4
+      operationId: onboardingStep4CreatePrimarchNode
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingStep4Request'
+      responses:
+        '200':
+          description: Step result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericStepResponse'
+        '409':
+          description: Primarch already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /onboarding/confirm:
+    post:
+      summary: Onboarding step 5 confirmation
+      operationId: onboardingConfirm
+      x-idempotency-required: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingConfirmRequest'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingConfirmResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /telemetry/dashboard:
+    get:
+      summary: Dashboard snapshot
+      operationId: getTelemetryDashboard
+      parameters:
+        - in: query
+          name: user_stable_id
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: as_of_day
+          required: false
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: short_window_days
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 7
+        - in: query
+          name: long_window_days
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 30
+      responses:
+        '200':
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetryDashboardResponse'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    ApiError:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - POLICY_BLOCK
+                - INVARIANT_FAIL
+                - CONSENT_EXPIRED
+                - TICKET_REQUIRED
+                - GOVERNANCE_TICKET_INVALID
+                - NONCE_INVALID
+                - NONCE_REPLAY
+                - NONCE_BINDING_MISMATCH
+                - RECORD_INVALID
+                - INSUFFICIENT_CONSENT_SCOPE
+                - STEP_OUT_OF_ORDER
+                - ONBOARDING_NOT_READY_OR_UNAUTHORIZED
+                - UNAUTHORIZED_GOVERNANCE
+                - PRIMARCH_ALREADY_EXISTS
+                - INVALID_ROLE_OUTPUT
+                - COUNCIL_INCOMPLETE
+                - EXPLAINABILITY_FAIL
+                - RATE_LIMITED
+                - SERVICE_UNAVAILABLE
+                - TIMEOUT_UPSTREAM
+            message:
+              type: string
+            retry_after_seconds:
+              type: integer
+              minimum: 0
+            details:
+              type: object
+              additionalProperties: true
+
+    EventWriteRequest:
+      type: object
+      required: [user_stable_id, event_type, payload]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        event_type: {type: string}
+        payload: {type: object, additionalProperties: true}
+
+    EventWriteResponse:
+      type: object
+      properties:
+        event_id: {type: integer}
+        provenance_hash: {type: string}
+        audit: {type: object}
+
+    ProjectionResponse:
+      type: object
+      required:
+        - user_stable_id
+        - profile
+        - active_boundaries
+        - current_policy
+        - active_memories
+        - recent_decisions_summary
+        - metadata
+      additionalProperties: false
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        profile: {type: object, additionalProperties: true}
+        active_boundaries:
+          type: array
+          items: {type: object, additionalProperties: true}
+        current_policy: {type: object, additionalProperties: true}
+        active_memories:
+          type: array
+          items: {type: object, additionalProperties: true}
+        recent_decisions_summary:
+          type: array
+          items: {type: object, additionalProperties: true}
+        metadata:
+          type: object
+          required: [generated_at, last_event_id, projection_version, caller_role, read_domains]
+          additionalProperties: false
+          properties:
+            generated_at: {type: string, format: date-time}
+            last_event_id: {type: integer, minimum: 0}
+            projection_version: {type: string}
+            caller_role:
+              type: string
+              enum: [primarch, co_primarch, advisor, observer, none]
+            read_domains:
+              type: array
+              items: {type: string}
+
+    MemoryCreateRequest:
+      type: object
+      required: [user_stable_id, type, content, source, sensitivity, retention, provenance_hash]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        type: {type: string}
+        content: {type: object, additionalProperties: true}
+        source: {type: string}
+        sensitivity: {type: string}
+        retention: {type: string}
+        provenance_hash: {type: string}
+
+    MemoryCreateResponse:
+      type: object
+      properties:
+        memory_id: {type: string, format: uuid}
+        audit: {type: object}
+
+    MemorySupersedeRequest:
+      type: object
+      required: [new_content, rationale]
+      properties:
+        new_content: {type: object, additionalProperties: true}
+        rationale: {type: string}
+
+    MemorySupersedeResponse:
+      type: object
+      properties:
+        new_memory_id: {type: string, format: uuid}
+        superseded_id: {type: string, format: uuid}
+        audit: {type: object}
+
+    DecisionEvaluateRequest:
+      type: object
+      required: [user_stable_id, query, domain, actionability_level, session_id]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        caller_node_id: {type: string, format: uuid}
+        caller_role:
+          type: string
+          enum: [primarch, co_primarch, advisor, observer, none]
+        query: {type: string}
+        domain:
+          type: string
+          enum: [finance, relationships, health, career, relocation, business, legal, governance, general]
+        actionability_level: {type: string, enum: [info_only, advisory, material_action]}
+        session_id: {type: string}
+        context: {type: object, additionalProperties: true}
+
+    DecisionEvaluateResponse:
+      type: object
+      required: [record_id, recommendation_id, final_output, council_views, metadata]
+      properties:
+        record_id: {type: string, format: uuid}
+        recommendation_id:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+        final_output:
+          $ref: '#/components/schemas/NouraFinalOutput'
+        council_views:
+          type: array
+          items:
+            $ref: '#/components/schemas/CouncilRoleOutput'
+        metadata:
+          $ref: '#/components/schemas/DecisionEvaluateMetadata'
+
+    NonceCreateRequest:
+      type: object
+      required: [user_stable_id, session_id, record_id, action_hash]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        session_id: {type: string}
+        record_id: {type: string, format: uuid}
+        action_hash: {type: string}
+        ttl_seconds: {type: integer, minimum: 1, maximum: 1800}
+
+    NonceCreateResponse:
+      type: object
+      properties:
+        nonce: {type: string}
+        expires_at: {type: string, format: date-time}
+        reused: {type: boolean}
+        audit: {type: object}
+
+    DecisionConfirmRequest:
+      type: object
+      required: [record_id, nonce, session_id, recommendation_id, action_hash]
+      properties:
+        record_id: {type: string, format: uuid}
+        nonce: {type: string}
+        session_id: {type: string}
+        recommendation_id:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+          description: Must match the recommendation_id returned by /decisions/evaluate for the same record_id.
+        action_hash: {type: string}
+
+    DecisionConfirmResponse:
+      type: object
+      properties:
+        status: {type: string}
+        confirmed_at: {type: string, format: date-time}
+        audit: {type: object}
+
+    PolicyChecks:
+      type: object
+      required: [boundaries_respected, non_negotiables_respected, consent_ok]
+      additionalProperties: false
+      properties:
+        boundaries_respected: {type: boolean}
+        non_negotiables_respected: {type: boolean}
+        consent_ok: {type: boolean}
+
+    EconomicHorizonAssessment:
+      type: object
+      required: [horizon_1y, horizon_5y, fragility_score, incentive_alignment_score]
+      additionalProperties: false
+      properties:
+        horizon_1y:
+          type: string
+          enum: [positive, neutral, negative, unknown]
+        horizon_5y:
+          type: string
+          enum: [positive, neutral, negative, unknown]
+        fragility_score: {type: number, minimum: 0, maximum: 1}
+        incentive_alignment_score: {type: number, minimum: 0, maximum: 1}
+
+    CouncilRoleOutput:
+      type: object
+      required:
+        - role
+        - position
+        - confidence
+        - assumptions
+        - evidence_refs
+        - risks
+        - recommended_action
+        - policy_checks
+      additionalProperties: false
+      properties:
+        role:
+          type: string
+          enum: [Engineer, Economist, Ethicist, Strategist, Arbiter, Historian]
+        position:
+          type: string
+          enum: [ALLOW, ALLOW_WITH_CONDITIONS, BLOCK, DEFER]
+        confidence: {type: number, minimum: 0, maximum: 1}
+        assumptions:
+          type: array
+          items: {type: string}
+        evidence_refs:
+          type: array
+          items: {type: string}
+        risks:
+          type: array
+          items: {type: string}
+        recommended_action:
+          type: [string, 'null']
+        policy_checks:
+          $ref: '#/components/schemas/PolicyChecks'
+        failure_mode:
+          type: [string, 'null']
+        economic_horizon_assessment:
+          $ref: '#/components/schemas/EconomicHorizonAssessment'
+      allOf:
+        - if:
+            properties:
+              role: {const: Economist}
+          then:
+            required: [economic_horizon_assessment]
+
+    NouraFinalOutput:
+      type: object
+      required:
+        - role
+        - final_position
+        - final_recommendation
+        - confidence
+        - final_assumptions
+        - final_risks
+        - contest_path
+        - requires_approval
+      additionalProperties: false
+      properties:
+        role:
+          type: string
+          const: Noura
+        final_position:
+          type: string
+          enum: [ALLOW, ALLOW_WITH_CONDITIONS, BLOCK, DEFER]
+        final_recommendation: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        final_assumptions:
+          type: array
+          items: {type: string}
+        final_risks:
+          type: array
+          items: {type: string}
+        dissent_summary:
+          type: [string, 'null']
+        contest_path: {type: string}
+        requires_approval: {type: boolean}
+        approved_by_roles:
+          type: [array, 'null']
+          items: {type: string}
+        blocked_by_roles:
+          type: [array, 'null']
+          items: {type: string}
+
+    DecisionEvaluateMetadata:
+      type: object
+      required: [generated_at, session_id, requires_consent_nonce, consent_domains_needed]
+      additionalProperties: false
+      properties:
+        generated_at: {type: string, format: date-time}
+        session_id: {type: string}
+        requires_consent_nonce: {type: boolean}
+        consent_domains_needed:
+          type: [array, 'null']
+          items: {type: string}
+
+    ChangeTicketCreateRequest:
+      type: object
+      required: [user_stable_id, requested_by, target_type, target_id, proposed_change]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        requested_by: {type: string, format: uuid}
+        target_type: {type: string}
+        target_id: {type: string, format: uuid}
+        proposed_change: {type: object, additionalProperties: true}
+
+    ChangeTicketCreateResponse:
+      type: object
+      properties:
+        ticket_id: {type: string, format: uuid}
+        status: {type: string}
+
+    ChangeApplyRequest:
+      type: object
+      required: [ticket_id, approver_node_id]
+      properties:
+        ticket_id: {type: string, format: uuid}
+        approver_node_id: {type: string, format: uuid}
+        quorum_proof: {type: object, additionalProperties: true}
+
+    ChangeApplyResponse:
+      type: object
+      properties:
+        applied: {type: boolean}
+        event_id: {type: integer}
+
+    OnboardingStep1Request:
+      type: object
+      required: [user_stable_id, declared_values, preferences, current_jurisdiction, is_owner]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        declared_values: {type: array, items: {type: string}}
+        preferences: {type: object, additionalProperties: true}
+        current_jurisdiction: {type: string}
+        is_owner: {type: boolean}
+
+    OnboardingStep2Request:
+      type: object
+      required: [user_stable_id, boundaries]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        caller_node_id: {type: string, format: uuid}
+        is_owner: {type: boolean}
+        boundaries:
+          type: array
+          items:
+            type: object
+            required: [text]
+            properties:
+              text: {type: string}
+
+    OnboardingStep3Request:
+      type: object
+      required: [user_stable_id, non_negotiables, escalation_rules, consent_requirements]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        caller_node_id: {type: string, format: uuid}
+        is_owner: {type: boolean}
+        non_negotiables: {type: array, items: {type: string}}
+        escalation_rules: {type: array, items: {type: object, additionalProperties: true}}
+        consent_requirements: {type: array, items: {type: object, additionalProperties: true}}
+
+    OnboardingStep4Request:
+      type: object
+      required: [user_stable_id, name_or_alias]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        name_or_alias: {type: string}
+        relationship_type: {type: string}
+        verification_level: {type: string}
+        consent_scope: {type: object, additionalProperties: true}
+        caller_node_id: {type: string, format: uuid}
+        is_owner: {type: boolean}
+
+    OnboardingConfirmRequest:
+      type: object
+      required: [user_stable_id, caller_node_id]
+      properties:
+        user_stable_id: {type: string, format: uuid}
+        caller_node_id: {type: string, format: uuid}
+        notes: {type: string}
+
+    OnboardingConfirmResponse:
+      type: object
+      properties:
+        status: {type: string}
+        projection_snapshot: {type: object, additionalProperties: true}
+        audit: {type: object}
+
+    GenericStepResponse:
+      type: object
+      required: [step, status, user_stable_id, next_step, audit]
+      additionalProperties: false
+      properties:
+        step:
+          type: integer
+          minimum: 1
+          maximum: 4
+        status:
+          type: string
+          enum: [ok]
+        user_stable_id:
+          type: string
+          format: uuid
+        next_step:
+          type: integer
+          minimum: 2
+          maximum: 5
+        profile_id:
+          type: integer
+        added_count:
+          type: integer
+          minimum: 0
+        policy_id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        audit:
+          type: object
+          required: [event_id]
+          additionalProperties: true
+          properties:
+            event_id:
+              type: integer
+
+    TelemetryDashboardResponse:
+      type: object
+      required:
+        - material_action_without_valid_nonce_7d
+        - boundary_respect_rate_7d
+        - policy_check_failure_rate_7d
+        - council_disagreement_entropy_7d
+        - nonce_misuse_events_7d
+        - onboarding_completion_rate_current
+        - override_rate_by_domain_7d
+      properties:
+        as_of_day_utc: {type: string, format: date}
+        material_action_without_valid_nonce_7d: {type: integer, minimum: 0}
+        material_action_without_valid_nonce_30d: {type: integer, minimum: 0}
+        material_action_total_7d: {type: integer, minimum: 0}
+        material_action_total_30d: {type: integer, minimum: 0}
+        material_action_confirmed_total_7d: {type: integer, minimum: 0}
+        material_action_confirmed_total_30d: {type: integer, minimum: 0}
+        boundary_respect_rate_7d: {type: number, minimum: 0, maximum: 1}
+        boundary_respect_rate_30d: {type: number, minimum: 0, maximum: 1}
+        policy_check_failure_rate_7d: {type: number, minimum: 0, maximum: 1}
+        policy_check_failure_rate_30d: {type: number, minimum: 0, maximum: 1}
+        council_disagreement_entropy_7d: {type: number}
+        council_disagreement_entropy_30d: {type: number}
+        override_rate_by_domain_7d:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 1
+        override_rate_by_domain_30d:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 1
+        nonce_misuse_events_7d:
+          type: object
+          properties:
+            NONCE_REPLAY: {type: integer, minimum: 0}
+            NONCE_BINDING_MISMATCH: {type: integer, minimum: 0}
+            CONSENT_EXPIRED: {type: integer, minimum: 0}
+            NONCE_INVALID: {type: integer, minimum: 0}
+          additionalProperties:
+            type: integer
+            minimum: 0
+        nonce_misuse_events_30d:
+          type: object
+          properties:
+            NONCE_REPLAY: {type: integer, minimum: 0}
+            NONCE_BINDING_MISMATCH: {type: integer, minimum: 0}
+            CONSENT_EXPIRED: {type: integer, minimum: 0}
+            NONCE_INVALID: {type: integer, minimum: 0}
+          additionalProperties:
+            type: integer
+            minimum: 0
+        onboarding_completion_rate_current:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Cumulative completion-to-date ratio (confirmed users / users with onboarding started).

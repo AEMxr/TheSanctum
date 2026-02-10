@@ -1,0 +1,14 @@
+﻿{
+    "run":  {
+                "failures":  [
+                                 {
+                                     "message":  "The term \u0027newman\u0027 is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.",
+                                     "source":  "newman_missing_or_unavailable"
+                                 }
+                             ]
+            },
+    "info":  {
+                 "note":  "newman_unavailable_in_environment"
+             },
+    "collected_at_utc":  "2026-02-09T08:36:44.0748659Z"
+}

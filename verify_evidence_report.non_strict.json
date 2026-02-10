@@ -1,0 +1,34 @@
+﻿{
+    "generated_at_utc":  "2026-02-09T10:46:29.6819023Z",
+    "evidence_dir":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum",
+    "block_on_preflight_blocked":  false,
+    "expected_p0_test_count":  0,
+    "requested_expected_p0_test_count":  12,
+    "resolved_expected_test_count":  0,
+    "resolved_expected_p0_test_count":  0,
+    "resolved_expected_telemetry_test_count":  0,
+    "resolved_executed_test_count":  0,
+    "script_name":  "verify_evidence.ps1",
+    "script_version":  "v2.3.3",
+    "git_commit":  "",
+    "host":  "DESKTOP-EL7VHAV",
+    "pwsh_version":  "5.1.19041.6456",
+    "blockers":  [
+                     "telemetry_before.json telemetry fetch failed (status_code=-1, error=Unable to connect to the remote server)",
+                     "telemetry_after.json telemetry fetch failed (status_code=-1, error=Unable to connect to the remote server)",
+                     "api_negative_tests.json[NONCE_BINDING_MISMATCH] expected status 400, got -1",
+                     "api_negative_tests.json[recommendation whitespace rejection] expected status 400, got -1",
+                     "api_negative_tests.json[CONSENT_EXPIRED] expected status 400, got -1",
+                     "api_negative_tests.json[NONCE_REPLAY] expected status 400, got -1",
+                     "newman_summary.json contains failures: 1",
+                     "db_verification_results.sql.out indicates SQL/check failure"
+                 ],
+    "warnings":  [
+                     "preflight_report.json verdict is \u0027PREFLIGHT_BLOCKED\u0027 (non-strict preflight mode)",
+                     "p0_gate_results.json indicates preflight_blocked=true (non-strict preflight mode)",
+                     "Skipping strict p0 pass/fail aggregate checks because preflight was blocked."
+                 ],
+    "blocker_count":  8,
+    "warning_count":  3,
+    "verdict":  "RC-BLOCKED"
+}

@@ -1,0 +1,6 @@
+﻿{
+    "request_url":  "http://127.0.0.1:1/telemetry/dashboard?user_stable_id=c795f2a6-b0b2-45e7-b241-929a71b7a602",
+    "status_code":  -1,
+    "error":  "Unable to connect to the remote server",
+    "captured_at_utc":  "2026-02-10T08:13:35.6830295Z"
+}

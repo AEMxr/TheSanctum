@@ -1,0 +1,323 @@
+name: release-gate-v2_3
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - "docs/release_promotion_checklist.md"
+      - "docs/schema_compatibility_policy.md"
+      - ".github/workflows/release-gate-v2_3.yml"
+
+jobs:
+  release-gate:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: windows-powershell-5_1
+            shell: powershell
+          - name: windows-pwsh-7
+            shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell modules
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          $pesterVersion = '5.5.0'
+          $pesterInstalled = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -eq [version]$pesterVersion }
+          if (-not $pesterInstalled) {
+            Install-Module Pester -RequiredVersion $pesterVersion -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+          Import-Module Pester -RequiredVersion $pesterVersion -Force
+          Get-Module Pester | Format-List Name,Version,Path
+
+      # Optional: install Newman if your runner image does not include it.
+      # - name: Install Newman
+      #   shell: pwsh
+      #   run: npm i -g newman
+
+      - name: Run release-candidate wrapper
+        shell: ${{ matrix.lane.shell }}
+        env:
+          BASE_URL: ${{ secrets.BASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          PSQL_ARGS: ${{ secrets.PSQL_ARGS }}
+        run: |
+          if (-not $env:BASE_URL) {
+            throw "Missing required secret BASE_URL"
+          }
+
+          Import-Module .\scripts\lib\release_gate_helpers.psm1 -Force
+          $psqlArgs = @(ConvertTo-SecretArgArray -RawValue $env:PSQL_ARGS)
+
+          & .\scripts\run_release_candidate.ps1 `
+            -BaseUrl $env:BASE_URL `
+            -EvidenceDir "." `
+            -ApiKey $env:API_KEY `
+            -PsqlExe "psql" `
+            -PsqlArgs $psqlArgs `
+            -NewmanExe "newman" `
+            -PostmanCollection ".\collection.json"
+
+      - name: Capture toolchain manifest
+        shell: ${{ matrix.lane.shell }}
+        env:
+          LANE_NAME: ${{ matrix.lane.name }}
+          LANE_SHELL: ${{ matrix.lane.shell }}
+        run: |
+          New-Item -ItemType Directory -Path .\artifacts -Force | Out-Null
+          $manifestPath = ".\artifacts\toolchain_manifest.txt"
+
+          function Get-ToolVersionLine {
+            param(
+              [string]$ToolName,
+              [string]$VersionCommand
+            )
+            $cmd = Get-Command $ToolName -ErrorAction SilentlyContinue
+            if ($null -eq $cmd) {
+              return "$ToolName=missing;path="
+            }
+            $source = [string]$cmd.Source
+            if ([string]::IsNullOrWhiteSpace($source)) { $source = "unknown" }
+            try {
+              $value = (& $ToolName $VersionCommand 2>&1 | Select-Object -First 1)
+              if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                return "$ToolName=present;path=$source;version=unknown"
+              }
+              return "$ToolName=present;path=$source;version=$([string]$value)"
+            }
+            catch {
+              return "$ToolName=present;path=$source;version=error:$($_.Exception.Message)"
+            }
+          }
+
+          $pesterVersion = ""
+          try {
+            $p = Get-Module Pester -ErrorAction SilentlyContinue
+            if ($null -ne $p) { $pesterVersion = [string]$p.Version }
+          }
+          catch {}
+          if ([string]::IsNullOrWhiteSpace($pesterVersion)) { $pesterVersion = "unknown" }
+
+          $lines = @(
+            "generated_at_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
+            "lane_name=$env:LANE_NAME",
+            "lane_shell=$env:LANE_SHELL",
+            "pwsh_version=$($PSVersionTable.PSVersion.ToString())",
+            "pester_version=$pesterVersion",
+            (Get-ToolVersionLine -ToolName "newman" -VersionCommand "--version"),
+            (Get-ToolVersionLine -ToolName "psql" -VersionCommand "--version")
+          )
+          Set-Content -Path $manifestPath -Value $lines -Encoding UTF8
+
+      - name: Run contract tests
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          New-Item -ItemType Directory -Path .\artifacts\test-results -Force | Out-Null
+
+          $testSpecs = @(
+            @{ Path = "tests/run_staging_v2_3.Tests.ps1"; Xml = "artifacts/test-results/run_staging_v2_3.Tests.xml" },
+            @{ Path = "tests/run_release_candidate.Tests.ps1"; Xml = "artifacts/test-results/run_release_candidate.Tests.xml" },
+            @{ Path = "tests/release_gate_helpers.Tests.ps1"; Xml = "artifacts/test-results/release_gate_helpers.Tests.xml" }
+          )
+
+          foreach ($spec in $testSpecs) {
+            $config = New-PesterConfiguration
+            $config.Run.Path = $spec.Path
+            $config.Run.PassThru = $true
+            $config.Output.Verbosity = "Detailed"
+            $config.TestResult.Enabled = $true
+            $config.TestResult.OutputFormat = "NUnitXml"
+            $config.TestResult.OutputPath = $spec.Xml
+
+            $result = Invoke-Pester -Configuration $config
+            if ($result.FailedCount -gt 0) {
+              throw "Pester failures in $($spec.Path): $($result.FailedCount)"
+            }
+          }
+
+      - name: Verify evidence artifacts
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          & .\scripts\lib\assert_evidence_artifacts.ps1
+
+      - name: Warn on deprecated draft schema (non-failing)
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          $summaryFiles = @(
+            "run_staging_summary.json",
+            "run_release_candidate_summary.json"
+          )
+
+          foreach ($file in $summaryFiles) {
+            if (-not (Test-Path -Path $file -PathType Leaf)) { continue }
+            try {
+              $summary = Get-Content -Path $file -Raw -Encoding UTF8 | ConvertFrom-Json
+              if (($summary.PSObject.Properties.Name -contains "summary_schema_version") -and ([string]$summary.summary_schema_version -eq "v2.4.0-draft1")) {
+                Write-Host "::warning::Deprecated summary schema detected in $file: v2.4.0-draft1"
+              }
+            }
+            catch {
+              Write-Host "::warning::Unable to inspect summary schema version in $file: $($_.Exception.Message)"
+            }
+          }
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-evidence-${{ matrix.lane.name }}
+          path: |
+            run_staging_summary.json
+            run_release_candidate_summary.json
+            verify_evidence_report.strict.json
+            p0_gate_results.json
+            db_verification_results.sql.out
+            newman_summary.json
+            newman_results.xml
+            telemetry_before.json
+            telemetry_after.json
+            api_negative_tests.json
+            checksums.txt
+            artifacts/toolchain_manifest.txt
+            artifacts/test-results/**
+            artifacts/logs/**
+
+  negative-path-smoke:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: windows-powershell-5_1
+            shell: powershell
+          - name: windows-pwsh-7
+            shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run intentional blocked scenario
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          if (Test-Path .\run_release_candidate_summary.json -PathType Leaf) {
+            Remove-Item .\run_release_candidate_summary.json -Force
+          }
+
+          & .\scripts\run_release_candidate.ps1 `
+            -BaseUrl "http://127.0.0.1:1" `
+            -EvidenceDir "." `
+            -PsqlExe "__missing_psql__" `
+            -NewmanExe "__missing_newman__"
+
+          $rcExit = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+          if ($rcExit -eq 0) {
+            throw "Negative-path smoke expected non-zero exit code."
+          }
+
+          if (-not (Test-Path .\run_release_candidate_summary.json -PathType Leaf)) {
+            throw "Negative-path smoke expected run_release_candidate_summary.json to exist."
+          }
+
+          $rc = Get-Content .\run_release_candidate_summary.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$rc.verdict -ne "RELEASE_CANDIDATE_BLOCKED") {
+            throw "Negative-path smoke expected verdict RELEASE_CANDIDATE_BLOCKED, got '$($rc.verdict)'."
+          }
+
+          $criteriaCount = 0
+          if (-not [int]::TryParse([string]$rc.criteria_failure_count, [ref]$criteriaCount)) {
+            throw "Negative-path smoke expected integer-like criteria_failure_count."
+          }
+          if ($criteriaCount -le 0) {
+            throw "Negative-path smoke expected criteria_failure_count > 0."
+          }
+
+          Write-Host "NEGATIVE_PATH_OK exit=$rcExit verdict=$($rc.verdict) criteria_failure_count=$criteriaCount"
+
+      - name: Capture toolchain manifest
+        shell: ${{ matrix.lane.shell }}
+        env:
+          LANE_NAME: ${{ matrix.lane.name }}
+          LANE_SHELL: ${{ matrix.lane.shell }}
+        run: |
+          New-Item -ItemType Directory -Path .\artifacts -Force | Out-Null
+          $manifestPath = ".\artifacts\toolchain_manifest.txt"
+
+          function Get-ToolVersionLine {
+            param(
+              [string]$ToolName,
+              [string]$VersionCommand
+            )
+            $cmd = Get-Command $ToolName -ErrorAction SilentlyContinue
+            if ($null -eq $cmd) {
+              return "$ToolName=missing;path="
+            }
+            $source = [string]$cmd.Source
+            if ([string]::IsNullOrWhiteSpace($source)) { $source = "unknown" }
+            try {
+              $value = (& $ToolName $VersionCommand 2>&1 | Select-Object -First 1)
+              if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                return "$ToolName=present;path=$source;version=unknown"
+              }
+              return "$ToolName=present;path=$source;version=$([string]$value)"
+            }
+            catch {
+              return "$ToolName=present;path=$source;version=error:$($_.Exception.Message)"
+            }
+          }
+
+          $lines = @(
+            "generated_at_utc=$((Get-Date).ToUniversalTime().ToString('o'))",
+            "lane_name=$env:LANE_NAME",
+            "lane_shell=$env:LANE_SHELL",
+            "pwsh_version=$($PSVersionTable.PSVersion.ToString())",
+            (Get-ToolVersionLine -ToolName "newman" -VersionCommand "--version"),
+            (Get-ToolVersionLine -ToolName "psql" -VersionCommand "--version")
+          )
+          Set-Content -Path $manifestPath -Value $lines -Encoding UTF8
+
+      - name: Verify evidence artifacts
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          & .\scripts\lib\assert_evidence_artifacts.ps1
+
+      - name: Warn on deprecated draft schema (non-failing)
+        shell: ${{ matrix.lane.shell }}
+        run: |
+          $summaryFiles = @(
+            "run_staging_summary.json",
+            "run_release_candidate_summary.json"
+          )
+
+          foreach ($file in $summaryFiles) {
+            if (-not (Test-Path -Path $file -PathType Leaf)) { continue }
+            try {
+              $summary = Get-Content -Path $file -Raw -Encoding UTF8 | ConvertFrom-Json
+              if (($summary.PSObject.Properties.Name -contains "summary_schema_version") -and ([string]$summary.summary_schema_version -eq "v2.4.0-draft1")) {
+                Write-Host "::warning::Deprecated summary schema detected in $file: v2.4.0-draft1"
+              }
+            }
+            catch {
+              Write-Host "::warning::Unable to inspect summary schema version in $file: $($_.Exception.Message)"
+            }
+          }
+
+      - name: Upload negative-path artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-negative-${{ matrix.lane.name }}
+          path: |
+            run_staging_summary.json
+            run_release_candidate_summary.json
+            verify_evidence_report.strict.json
+            artifacts/toolchain_manifest.txt
+            artifacts/logs/**

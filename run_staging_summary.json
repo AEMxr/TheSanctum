@@ -1,0 +1,93 @@
+﻿{
+    "generated_at_utc":  "2026-02-10T08:13:40.9848130Z",
+    "summary_schema_version":  "v2.4.0",
+    "base_url":  "http://127.0.0.1:1",
+    "user_id":  "c795f2a6-b0b2-45e7-b241-929a71b7a602",
+    "evidence_dir":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum",
+    "allow_preflight_blocked":  false,
+    "exits":  {
+                  "preflight":  1,
+                  "db_checks":  -1,
+                  "p0_gate":  1,
+                  "verify_strict":  1,
+                  "verify_non_strict":  null
+              },
+    "logs":  {
+                 "preflight":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\preflight_20260210_001330.log",
+                 "db_checks":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\db_checks_20260210_001330.log",
+                 "p0_gate":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\p0_gate_20260210_001330.log",
+                 "verify_strict":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\verify_strict_20260210_001330.log",
+                 "verify_non_strict":  null
+             },
+    "run_blockers":  [
+                         "Required executable not found on PATH: __missing_psql__",
+                         "Required executable not found on PATH: __missing_newman__"
+                     ],
+    "run_warnings":  [
+
+                     ],
+    "used_fallback_artifacts":  true,
+    "fallback_artifacts":  [
+                               {
+                                   "artifact":  "telemetry_before.json",
+                                   "reason":  "Captured transport error envelope: Unable to connect to the remote server",
+                                   "type":  "transport_envelope",
+                                   "generated_at_utc":  "2026-02-10T08:13:35.7313546Z"
+                               },
+                               {
+                                   "artifact":  "db_verification_results.sql.out",
+                                   "reason":  "DB step failed (exit -1); output derived from failure log.",
+                                   "type":  "derived_failure_output",
+                                   "generated_at_utc":  "2026-02-10T08:13:35.7529012Z"
+                               },
+                               {
+                                   "artifact":  "telemetry_after.json",
+                                   "reason":  "Captured transport error envelope: Unable to connect to the remote server",
+                                   "type":  "transport_envelope",
+                                   "generated_at_utc":  "2026-02-10T08:13:40.2010354Z"
+                               }
+                           ],
+    "release_gate_reason":  [
+                                "STRICT_VERIFY_FAILED",
+                                "WRAPPER_BLOCKERS_PRESENT",
+                                "FALLBACK_ARTIFACTS_PRESENT"
+                            ],
+    "strict_release_gate_ready":  false,
+    "release_decision":  "FAIL",
+    "steps":  [
+                  {
+                      "name":  "preflight",
+                      "exit_code":  1,
+                      "duration_ms":  2299,
+                      "log":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\preflight_20260210_001330.log",
+                      "success":  false,
+                      "error":  ""
+                  },
+                  {
+                      "name":  "db_checks",
+                      "exit_code":  -1,
+                      "duration_ms":  0,
+                      "log":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\db_checks_20260210_001330.log",
+                      "success":  false,
+                      "error":  "psql missing"
+                  },
+                  {
+                      "name":  "p0_gate",
+                      "exit_code":  1,
+                      "duration_ms":  2390,
+                      "log":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\p0_gate_20260210_001330.log",
+                      "success":  false,
+                      "error":  ""
+                  },
+                  {
+                      "name":  "verify_strict",
+                      "exit_code":  1,
+                      "duration_ms":  582,
+                      "log":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\artifacts\\logs\\verify_strict_20260210_001330.log",
+                      "success":  false,
+                      "error":  ""
+                  }
+              ],
+    "strict_exit":  1,
+    "non_strict_exit":  null
+}

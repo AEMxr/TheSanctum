@@ -1,0 +1,36 @@
+﻿{
+    "generated_at_utc":  "2026-02-10T08:13:41.0929571Z",
+    "summary_schema_version":  "v2.4.0",
+    "base_url":  "http://127.0.0.1:1",
+    "evidence_dir":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum",
+    "staging_wrapper_path":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\scripts\\run_staging_v2_3.ps1",
+    "staging_summary_path":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\run_staging_summary.json",
+    "strict_verify_report_path":  "D:\\asmal\\Documents\\ChatGPT_Grok_Version_of_The_Sanctum\\verify_evidence_report.strict.json",
+    "staging_wrapper_exit_code":  1,
+    "release_decision":  "FAIL",
+    "strict_release_gate_ready":  false,
+    "strict_exit":  1,
+    "strict_verify_report_verdict":  "RC-BLOCKED",
+    "strict_verify_report_blocker_count":  10,
+    "strict_verify_report_warning_count":  1,
+    "used_fallback_artifacts":  true,
+    "run_blocker_count":  2,
+    "release_gate_reason":  [
+                                "STRICT_VERIFY_FAILED",
+                                "WRAPPER_BLOCKERS_PRESENT",
+                                "FALLBACK_ARTIFACTS_PRESENT"
+                            ],
+    "criteria_failures":  [
+                              "Staging wrapper exit code is non-zero: 1",
+                              "release_decision must be PASS (got \u0027FAIL\u0027)",
+                              "strict_release_gate_ready must be true",
+                              "strict_exit must be 0 (got \u00271\u0027)",
+                              "used_fallback_artifacts must be false (got \u0027True\u0027)",
+                              "run_blockers must be empty (count=2)",
+                              "release_gate_reason must be empty for release candidate promotion",
+                              "verify_evidence_report.strict.json verdict must be RC-STAGING-READY (got \u0027RC-BLOCKED\u0027)",
+                              "verify_evidence_report.strict.json blocker_count must be 0 (got 10)"
+                          ],
+    "criteria_failure_count":  9,
+    "verdict":  "RELEASE_CANDIDATE_BLOCKED"
+}

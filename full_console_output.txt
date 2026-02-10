@@ -1,0 +1,100 @@
+﻿=== TOOLING CHECK ===
+Timestamp: 2026-02-09T00:37:53.4726394-08:00
+psql:
+MISSING
+newman:
+MISSING
+powershell:
+
+CommandType     Name                                               Version    Source                                   
+-----------     ----                                               -------    ------                                   
+Application     powershell.exe                                     10.0.19... C:\WINDOWS\System32\WindowsPowerShell\...
+
+
+
+
+=== DB VERIFICATION OUTPUT ===
+HG-MoE v2.3 DB verification run: 2026-02-09T00:33:16.4363385-08:00
+Commands:
+--- RUN: psql -v ON_ERROR_STOP=1 -f sanctum_v2_2_runtime.sql
+ERROR: The term 'psql' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+--- RUN: psql -v ON_ERROR_STOP=1 -f telemetry_pack_v2_1.sql
+ERROR: The term 'psql' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+--- RUN: psql -v ON_ERROR_STOP=1 -f p0_db_checks.sql
+ERROR: The term 'psql' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+
+=== P0 GATE OUTPUT (SANITIZED) ===
+RUN_USER_ID=719b86b7-7467-4f94-8eb9-23d6a7077410
+FAIL P0-01 Onboarding happy path + advisory evaluate :: Unable to connect to the remote server
+FAIL P0-02 Material action eval -> nonce create -> confirm :: Unable to connect to the remote server
+FAIL P0-03 Nonce replay rejected :: Unexpected error code ''. Expected: NONCE_REPLAY. Body: 
+FAIL P0-04 Nonce binding mismatch rejected :: Unable to connect to the remote server
+FAIL P0-05 Nonce expiry rejected :: Unable to connect to the remote server
+FAIL P0-06 Onboarding step-order bypass rejected :: Unable to connect to the remote server
+FAIL P0-07 Arbiter veto enforced :: Unable to connect to the remote server
+FAIL P0-08 Primarch uniqueness enforced :: Unable to connect to the remote server
+FAIL P0-09 Projection redaction non-primarch :: Unable to connect to the remote server
+FAIL P0-10 Explainability-or-block behavior :: Unable to connect to the remote server
+FAIL P0-11 Invalid role output resilience :: Unable to connect to the remote server
+PASS P0-12 Event log immutability (DB)
+FAIL Telemetry dashboard hard/warn gates :: Unable to connect to the remote server
+
+Name                                                  Status DurationMs Error                                          
+----                                                  ------ ---------- -----                                          
+P0-01 Onboarding happy path + advisory evaluate       FAIL         4158 Unable to connect to the remote server         
+P0-02 Material action eval -> nonce create -> confirm FAIL         4069 Unable to connect to the remote server         
+P0-03 Nonce replay rejected                           FAIL         4118 Unexpected error code ''. Expected: NONCE_RE...
+P0-04 Nonce binding mismatch rejected                 FAIL         4014 Unable to connect to the remote server         
+P0-05 Nonce expiry rejected                           FAIL         4063 Unable to connect to the remote server         
+P0-06 Onboarding step-order bypass rejected           FAIL         4068 Unable to connect to the remote server         
+P0-07 Arbiter veto enforced                           FAIL         4048 Unable to connect to the remote server         
+P0-08 Primarch uniqueness enforced                    FAIL         4102 Unable to connect to the remote server         
+P0-09 Projection redaction non-primarch               FAIL         4064 Unable to connect to the remote server         
+P0-10 Explainability-or-block behavior                FAIL         4051 Unable to connect to the remote server         
+P0-11 Invalid role output resilience                  FAIL         4065 Unable to connect to the remote server         
+P0-12 Event log immutability (DB)                     PASS            2                                                
+Telemetry dashboard hard/warn gates                   FAIL        13275 Unable to connect to the remote server         
+
+
+powershell.exe : D:\asmal\Documents\ChatGPT_Grok_Version_of_The_Sanctum\p0_ci_gate.ps1 : Argument types do not match
+At line:5 char:1
++ & powershell -NoProfile -ExecutionPolicy Bypass -File .\p0_ci_gate.ps ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\asmal\Docume...es do not match:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    + CategoryInfo          : OperationStopped: (:) [p0_ci_gate.ps1], ArgumentException
+    + FullyQualifiedErrorId : System.ArgumentException,p0_ci_gate.ps1
+ 
+P0_GATE_EXIT_CODE=1
+
+
+=== VERIFY_EVIDENCE OUTPUT ===
+Blockers:
+ - telemetry_before.json missing required key: material_action_without_valid_nonce_7d
+ - telemetry_before.json missing required key: boundary_respect_rate_7d
+ - telemetry_before.json missing required key: policy_check_failure_rate_7d
+ - telemetry_before.json missing required key: council_disagreement_entropy_7d
+ - telemetry_before.json missing required key: nonce_misuse_events_7d
+ - telemetry_before.json missing required key: override_rate_by_domain_7d
+ - telemetry_before.json missing required key: onboarding_completion_rate_current
+ - telemetry_after.json missing required key: material_action_without_valid_nonce_7d
+ - telemetry_after.json missing required key: boundary_respect_rate_7d
+ - telemetry_after.json missing required key: policy_check_failure_rate_7d
+ - telemetry_after.json missing required key: council_disagreement_entropy_7d
+ - telemetry_after.json missing required key: nonce_misuse_events_7d
+ - telemetry_after.json missing required key: override_rate_by_domain_7d
+ - telemetry_after.json missing required key: onboarding_completion_rate_current
+ - p0_gate_results.json expected passed=12, got 1
+ - p0_gate_results.json expected failed=0, got 12
+ - p0_gate_results.json expected gate_status=PASS, got FAIL
+ - p0_gate_results.json has failing tests: 12
+ - api_negative_tests.json[NONCE_BINDING_MISMATCH] expected status 400, got -1
+ - api_negative_tests.json[recommendation whitespace rejection] expected status 400, got -1
+ - api_negative_tests.json[CONSENT_EXPIRED] expected status 400, got -1
+ - api_negative_tests.json[NONCE_REPLAY] expected status 400, got -1
+ - newman_summary.json contains failures: 1
+ - db_verification_results.sql.out indicates SQL/check failure
+VERDICT: RC-BLOCKED
+VERIFY_EXIT_CODE=1
