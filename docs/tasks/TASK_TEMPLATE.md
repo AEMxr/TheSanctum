@@ -1,5 +1,7 @@
 ﻿# TASK TEMPLATE
 
+Required governance headings are linted; keep heading names exact.
+
 ## TASK ID / Title
 
 ## Objective lane
@@ -29,3 +31,4 @@ Guidance:
 
 ## Execution notes
 - 
+

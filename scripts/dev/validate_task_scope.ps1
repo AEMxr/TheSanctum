@@ -71,6 +71,37 @@ foreach ($rule in $allowed) {
   }
 }
 
+$requiredTaskSections = @(
+  "## Objective lane",
+  "## Goal (single measurable outcome)",
+  "## Scope (allowed files)",
+  "## Non-goals",
+  "## Acceptance checklist",
+  "## Deliverables (SHA, diff summary)",
+  "## Rollback anchor",
+  "## Execution notes"
+)
+
+$taskCardCompletenessErrors = New-Object System.Collections.Generic.List[string]
+foreach ($file in $ChangedFiles) {
+  $normalized = $file -replace '\\', '/'
+  if ($normalized -notmatch '^docs/tasks/TASK-[^/]+\.md$') { continue }
+  if (-not (Test-Path -Path $file -PathType Leaf)) { continue }
+
+  $taskLines = Get-Content -Path $file
+  $missingSections = New-Object System.Collections.Generic.List[string]
+  foreach ($section in $requiredTaskSections) {
+    $pattern = '^\s*' + [regex]::Escape($section) + '\s*$'
+    if (-not ($taskLines | Where-Object { $_ -match $pattern })) {
+      [void]$missingSections.Add($section)
+    }
+  }
+
+  if ($missingSections.Count -gt 0) {
+    [void]$taskCardCompletenessErrors.Add("$file => missing sections: $($missingSections -join '; ')")
+  }
+}
+
 function Test-InScope {
   param(
     [string]$Path,
@@ -155,6 +186,17 @@ if ($invalidScopeEntries.Count -gt 0) {
   Write-Host "Invalid scope entries detected (literal paths not found):"
   foreach ($entry in $invalidScopeEntries) {
     Write-Host " - $entry"
+  }
+}
+
+if ($taskCardCompletenessErrors.Count -gt 0) {
+  $hasFailures = $true
+  if ($offending.Count -eq 0 -and $checklistDuplicateErrors.Count -eq 0 -and $invalidScopeEntries.Count -eq 0) {
+    Write-Host "FAIL"
+  }
+  Write-Host "Incomplete task cards detected:"
+  foreach ($err in $taskCardCompletenessErrors) {
+    Write-Host " - $err"
   }
 }
 
