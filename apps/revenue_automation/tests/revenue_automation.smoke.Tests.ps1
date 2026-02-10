@@ -310,4 +310,99 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([bool]$invalidCreatedAt[0].pass) -Expected $true -Message "task_invalid_created_at should pass replay expectation."
     }
   }
+
+  Context "8) deterministic lead scoring and routing" {
+    It "returns stable ranked leads and routing reason codes across repeated runs" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-001"; segment = "saas"; intent = "demo"; budget = 500; engagement_score = 40 },
+            [pscustomobject]@{ lead_id = "lead-003"; segment = "b2b"; pain_match = $true; budget = 3000; engagement_score = 80 },
+            [pscustomobject]@{ lead_id = "lead-002" }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "First deterministic routing run should exit 0."
+      Assert-Equal -Actual $run2.exit_code -Expected 0 -Message "Second deterministic routing run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "First deterministic routing run should return SUCCESS."
+      Assert-Equal -Actual ([string]$run2.result.status) -Expected "SUCCESS" -Message "Second deterministic routing run should return SUCCESS."
+
+      $ordered1 = @($run1.result.route.ranked_leads | ForEach-Object { [string]$_.lead_id })
+      $ordered2 = @($run2.result.route.ranked_leads | ForEach-Object { [string]$_.lead_id })
+      Assert-Equal -Actual ($ordered1 -join ",") -Expected "lead-003,lead-001,lead-002" -Message "Rank order mismatch for deterministic scoring."
+      Assert-Equal -Actual ($ordered2 -join ",") -Expected "lead-003,lead-001,lead-002" -Message "Repeat run rank order mismatch for deterministic scoring."
+      Assert-Equal -Actual ($ordered1 -join ",") -Expected ($ordered2 -join ",") -Message "Repeated run ranking must be stable."
+
+      Assert-Equal -Actual ([string]$run1.result.route.selected_route) -Expected "priority_outreach" -Message "Expected priority_outreach selected route."
+      Assert-Contains -Collection @($run1.result.reason_codes) -Value "high_priority_score" -Message "Expected high_priority_score reason code."
+      Assert-Contains -Collection @($run1.result.route.reason_codes) -Value "fit_segment" -Message "Expected fit_segment reason code."
+    }
+
+    It "uses lead_id ascending tie-break when scores are equal" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-c" },
+            [pscustomobject]@{ lead_id = "lead-a" },
+            [pscustomobject]@{ lead_id = "lead-b" }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Tie-break run should exit 0."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Tie-break run should return SUCCESS."
+
+      $ordered = @($run.result.route.ranked_leads | ForEach-Object { [string]$_.lead_id })
+      Assert-Equal -Actual ($ordered -join ",") -Expected "lead-a,lead-b,lead-c" -Message "Tie-break ordering must use lead_id ascending."
+    }
+
+    It "returns FAILED for malformed payload.leads" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = "not-an-object-array"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed payload.leads should exit 1."
+      Assert-True -Condition ($null -ne $run.result) -Message "Malformed payload.leads should emit result JSON."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed payload.leads should return FAILED."
+      Assert-True -Condition (([string]$run.result.error) -like "*payload.leads must be an array or object.*") -Message "Malformed payload.leads should include routing validation error."
+    }
+  }
 }
