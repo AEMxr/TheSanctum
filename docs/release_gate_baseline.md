@@ -36,3 +36,10 @@ It is the rollback and comparison anchor for future gate work.
 
 ## Rollback Anchor
 Use git tag `release-gate-baseline-v2.4.0` as the rollback checkpoint for this baseline.
+
+## Execution OS Integration
+This baseline is governed by the repo Execution OS documents:
+1. `docs/mission_control.md`
+2. `docs/non_negotiables.md`
+3. `docs/checklists/pre_commit_drift_alarm.md`
+4. `docs/checklists/zip_audit_playbook.md`
