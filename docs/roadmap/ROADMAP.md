@@ -1,4 +1,4 @@
-# Roadmap
+﻿# Roadmap
 
 ## Purpose
 Track lane-specific delivery while preserving release-gate and execution-governance invariants.
@@ -12,6 +12,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 1. `docs/governance/COUNCIL_ARBITRATION_SPEC.md` defines deterministic council conflict resolution, deadlock handling, and Primarch override semantics.
 2. Governance tasks must preserve deterministic deny/invalid states and explicit escalation paths.
 3. `docs/governance/CRISIS_EXPEDITE_PROTOCOL.md` and `docs/governance/GOVERNANCE_CHANGE_CONTROL.md` define bounded emergency flow, no-silent-bypass rules, and mandatory post-hoc review obligations.
+4. `docs/data/MEMORY_GOVERNANCE_AND_DRIFT_CONTROL.md` and `docs/data/TRAINING_LINEAGE_STANDARD.md` define memory promotion, contradiction quarantine, and lineage gates required before training-candidate promotion.
 
 ## Active Revenue Priorities
 1. Keep revenue automation default-off and safe by default.
