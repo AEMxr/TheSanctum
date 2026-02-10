@@ -74,6 +74,29 @@ function Test-InScope {
   return $false
 }
 
+$checklistDuplicateErrors = New-Object System.Collections.Generic.List[string]
+foreach ($file in $ChangedFiles) {
+  $normalized = $file -replace '\\', '/'
+  if ($normalized -notmatch '^docs/checklists/.+\.md$') { continue }
+  if (-not (Test-Path -Path $file -PathType Leaf)) { continue }
+
+  $checklistLines = Get-Content -Path $file
+  $seen = @{}
+  foreach ($line in $checklistLines) {
+    $trimmed = $line.Trim()
+    if ($trimmed -match '^-\s+\[(?:\s|x|X)\]\s+(.+)$') {
+      $itemText = ($matches[1].Trim() -replace '\s+', ' ').ToLowerInvariant()
+      if ($seen.ContainsKey($itemText)) {
+        [void]$checklistDuplicateErrors.Add("$file => $($matches[1].Trim())")
+      }
+      else {
+        $seen[$itemText] = $true
+      }
+    }
+  }
+}
+
+$hasFailures = $false
 $offending = New-Object System.Collections.Generic.List[string]
 foreach ($file in $ChangedFiles) {
   if (-not (Test-InScope -Path $file -Allowed @($allowed))) {
@@ -82,11 +105,26 @@ foreach ($file in $ChangedFiles) {
 }
 
 if ($offending.Count -gt 0) {
+  $hasFailures = $true
   Write-Host "FAIL"
   Write-Host "Out-of-scope changed files:"
   foreach ($path in $offending) {
     Write-Host " - $path"
   }
+}
+
+if ($checklistDuplicateErrors.Count -gt 0) {
+  $hasFailures = $true
+  if ($offending.Count -eq 0) {
+    Write-Host "FAIL"
+  }
+  Write-Host "Duplicate checklist entries detected:"
+  foreach ($dup in $checklistDuplicateErrors) {
+    Write-Host " - $dup"
+  }
+}
+
+if ($hasFailures) {
   exit 1
 }
 
