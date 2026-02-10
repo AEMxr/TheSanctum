@@ -14,6 +14,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 3. `docs/governance/CRISIS_EXPEDITE_PROTOCOL.md` and `docs/governance/GOVERNANCE_CHANGE_CONTROL.md` define bounded emergency flow, no-silent-bypass rules, and mandatory post-hoc review obligations.
 4. `docs/data/MEMORY_GOVERNANCE_AND_DRIFT_CONTROL.md` and `docs/data/TRAINING_LINEAGE_STANDARD.md` define memory promotion, contradiction quarantine, and lineage gates required before training-candidate promotion.
 5. `docs/security/LINEAGE_PRODUCT_ISOLATION_POLICY.md` and `docs/security/KEY_DOMAIN_SEPARATION.md` enforce lineage/product trust boundaries and key-domain separation requirements for governance-safe evolution.
+6. `docs/governance/AGENT_TOOL_RISK_MATRIX.md` and `docs/governance/TOOL_EXECUTION_GUARDRAILS.md` define tool-tier approvals, deny conditions, and auto-stop escalation controls.
 
 ## Active Revenue Priorities
 1. Keep revenue automation default-off and safe by default.
