@@ -57,6 +57,24 @@ Promotion is valid only if all are true:
    - `verdict == "RC-STAGING-READY"`
    - `blocker_count == 0`
 
+## Task Execution and Reporting Gate (Required)
+Before final promotion sign-off for a task-driven change set:
+1. Scope validator must pass against the active task card and staged files.
+2. The required 4-suite gate must pass:
+   - `tests/run_staging_v2_3.Tests.ps1`
+   - `tests/run_release_candidate.Tests.ps1`
+   - `tests/release_gate_helpers.Tests.ps1`
+   - `apps/revenue_automation/tests/revenue_automation.smoke.Tests.ps1`
+3. Completion report must include:
+   - task ID
+   - commit SHA
+   - exact changed files
+   - scope validator result
+   - 4-suite pass/fail counts
+   - drift status
+   - rollback anchor used
+   - next first command
+
 ## Evidence Bundle (Archive Canonical Pass)
 Archive at least:
 1. `run_staging_summary.json`
