@@ -102,6 +102,79 @@ foreach ($file in $ChangedFiles) {
   }
 }
 
+$sessionLogIntegrityErrors = New-Object System.Collections.Generic.List[string]
+foreach ($file in $ChangedFiles) {
+  $normalized = $file -replace '\\', '/'
+  if ($normalized -ne 'docs/session_log.md') { continue }
+  if (-not (Test-Path -Path $file -PathType Leaf)) { continue }
+
+  $logLines = Get-Content -Path $file
+  $entriesHeaderIndex = -1
+  for ($i = 0; $i -lt $logLines.Count; $i++) {
+    if ($logLines[$i].Trim() -eq '## Entries') {
+      $entriesHeaderIndex = $i
+      break
+    }
+  }
+  if ($entriesHeaderIndex -lt 0) {
+    [void]$sessionLogIntegrityErrors.Add("$file => missing '## Entries' section")
+    continue
+  }
+
+  $entryStarts = New-Object System.Collections.Generic.List[int]
+  for ($i = $entriesHeaderIndex + 1; $i -lt $logLines.Count; $i++) {
+    if ($logLines[$i] -match '^\s*-\s+Date/Time:\s*(.+)\s*$') {
+      [void]$entryStarts.Add($i)
+    }
+  }
+
+  foreach ($start in $entryStarts) {
+    $entryLabel = if ($logLines[$start] -match '^\s*-\s+Date/Time:\s*(.+)\s*$') { $matches[1].Trim() } else { "unknown" }
+    $end = $logLines.Count
+    foreach ($candidate in $entryStarts) {
+      if ($candidate -gt $start) {
+        $end = $candidate
+        break
+      }
+    }
+
+    $nextCommandLine = -1
+    $inlineValue = ""
+    for ($i = $start; $i -lt $end; $i++) {
+      if ($logLines[$i] -match '^\s*-\s+Next first command:\s*(.*)$') {
+        $nextCommandLine = $i
+        $inlineValue = $matches[1].Trim()
+        break
+      }
+    }
+
+    if ($nextCommandLine -lt 0) {
+      [void]$sessionLogIntegrityErrors.Add("$file => entry '$entryLabel' missing 'Next first command:' line")
+      continue
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($inlineValue)) {
+      continue
+    }
+
+    $hasIndentedCommand = $false
+    for ($i = $nextCommandLine + 1; $i -lt $end; $i++) {
+      $line = $logLines[$i]
+      if ($line -match '^\s*-\s+[A-Za-z][^:]*:') {
+        break
+      }
+      if ($line -match '^\s{2,}\S+') {
+        $hasIndentedCommand = $true
+        break
+      }
+    }
+
+    if (-not $hasIndentedCommand) {
+      [void]$sessionLogIntegrityErrors.Add("$file => entry '$entryLabel' has blank 'Next first command:' value")
+    }
+  }
+}
+
 function Test-InScope {
   param(
     [string]$Path,
@@ -196,6 +269,17 @@ if ($taskCardCompletenessErrors.Count -gt 0) {
   }
   Write-Host "Incomplete task cards detected:"
   foreach ($err in $taskCardCompletenessErrors) {
+    Write-Host " - $err"
+  }
+}
+
+if ($sessionLogIntegrityErrors.Count -gt 0) {
+  $hasFailures = $true
+  if ($offending.Count -eq 0 -and $checklistDuplicateErrors.Count -eq 0 -and $invalidScopeEntries.Count -eq 0 -and $taskCardCompletenessErrors.Count -eq 0) {
+    Write-Host "FAIL"
+  }
+  Write-Host "Session log integrity violations detected:"
+  foreach ($err in $sessionLogIntegrityErrors) {
     Write-Host " - $err"
   }
 }
