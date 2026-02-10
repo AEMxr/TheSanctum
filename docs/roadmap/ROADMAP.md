@@ -8,6 +8,10 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 2. Enforce deterministic scope validation before tests.
 3. Keep task execution/reporting contract normalized and auditable.
 
+## Governance Dependencies
+1. `docs/governance/COUNCIL_ARBITRATION_SPEC.md` defines deterministic council conflict resolution, deadlock handling, and Primarch override semantics.
+2. Governance tasks must preserve deterministic deny/invalid states and explicit escalation paths.
+
 ## Active Revenue Priorities
 1. Keep revenue automation default-off and safe by default.
 2. Expand deterministic fixture coverage for contract reliability.
