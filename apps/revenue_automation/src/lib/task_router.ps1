@@ -400,6 +400,140 @@ function Get-DeterministicProposalFromOffer {
   }
 }
 
+function Get-DeterministicPolicyDecision {
+  param([Parameter(Mandatory = $true)][object]$Task)
+
+  $payload = $Task.payload
+  if (-not (Test-ObjectLike -Value $payload)) {
+    return [pscustomobject]@{
+      allowed = $false
+      context_key = "missing_context"
+      reason_codes = @("policy_denied_missing_context")
+    }
+  }
+
+  $payloadNames = @(Get-ObjectPropertyNames -Value $payload)
+  $policySource = $null
+  $shouldEvaluate = $false
+
+  if ($payloadNames -contains "policy_context") {
+    $policySource = Get-ObjectPropertyValue -Value $payload -Name "policy_context"
+    $shouldEvaluate = $true
+  }
+  else {
+    $inlinePolicyKeys = @(
+      "platform",
+      "account_id",
+      "community_id",
+      "target_bucket",
+      "action_type",
+      "window_key",
+      "context_cap",
+      "actions_in_window",
+      "cooldown_seconds",
+      "seconds_since_last_action"
+    )
+    foreach ($k in $inlinePolicyKeys) {
+      if ($payloadNames -contains $k) {
+        $shouldEvaluate = $true
+        break
+      }
+    }
+    if ($shouldEvaluate) {
+      $policySource = $payload
+    }
+  }
+
+  if (-not $shouldEvaluate) {
+    return [pscustomobject]@{
+      allowed = $true
+      context_key = "policy_not_provided"
+      reason_codes = @()
+    }
+  }
+
+  if (-not (Test-ObjectLike -Value $policySource)) {
+    return [pscustomobject]@{
+      allowed = $false
+      context_key = "missing_context"
+      reason_codes = @("policy_denied_missing_context")
+    }
+  }
+
+  $platform = ([string](Get-ObjectPropertyValue -Value $policySource -Name "platform")).Trim().ToLowerInvariant()
+  $accountId = ([string](Get-ObjectPropertyValue -Value $policySource -Name "account_id")).Trim()
+  $communityId = ([string](Get-ObjectPropertyValue -Value $policySource -Name "community_id")).Trim()
+  if ([string]::IsNullOrWhiteSpace($communityId)) {
+    $communityId = ([string](Get-ObjectPropertyValue -Value $policySource -Name "target_bucket")).Trim()
+  }
+
+  $actionType = ([string](Get-ObjectPropertyValue -Value $policySource -Name "action_type")).Trim().ToLowerInvariant()
+  if ([string]::IsNullOrWhiteSpace($actionType)) {
+    $actionType = "post"
+  }
+
+  $windowKey = ([string](Get-ObjectPropertyValue -Value $policySource -Name "window_key")).Trim()
+  if ([string]::IsNullOrWhiteSpace($windowKey)) {
+    $createdAt = ([string]$Task.created_at_utc).Trim()
+    $tmp = [datetime]::MinValue
+    if ([datetime]::TryParse($createdAt, [ref]$tmp)) {
+      $windowKey = $tmp.ToUniversalTime().ToString("yyyyMMddHH")
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($platform) -or [string]::IsNullOrWhiteSpace($accountId) -or [string]::IsNullOrWhiteSpace($communityId) -or [string]::IsNullOrWhiteSpace($windowKey)) {
+    return [pscustomobject]@{
+      allowed = $false
+      context_key = "missing_context"
+      reason_codes = @("policy_denied_missing_context")
+    }
+  }
+
+  $contextKey = "{0}|{1}|{2}|{3}|{4}" -f $platform, $accountId, $communityId, $actionType, $windowKey
+
+  $contextCap = 3
+  $tmpCap = 0
+  if ([int]::TryParse([string](Get-ObjectPropertyValue -Value $policySource -Name "context_cap"), [ref]$tmpCap)) {
+    $contextCap = [Math]::Max(0, $tmpCap)
+  }
+
+  $actionsInWindow = 0
+  $tmpActions = 0
+  if ([int]::TryParse([string](Get-ObjectPropertyValue -Value $policySource -Name "actions_in_window"), [ref]$tmpActions)) {
+    $actionsInWindow = [Math]::Max(0, $tmpActions)
+  }
+
+  $cooldownSeconds = 0
+  $tmpCooldown = 0
+  if ([int]::TryParse([string](Get-ObjectPropertyValue -Value $policySource -Name "cooldown_seconds"), [ref]$tmpCooldown)) {
+    $cooldownSeconds = [Math]::Max(0, $tmpCooldown)
+  }
+
+  $secondsSinceLastAction = 2147483647
+  $tmpSince = 0
+  if ([int]::TryParse([string](Get-ObjectPropertyValue -Value $policySource -Name "seconds_since_last_action"), [ref]$tmpSince)) {
+    $secondsSinceLastAction = [Math]::Max(0, $tmpSince)
+  }
+
+  $denies = New-Object System.Collections.Generic.List[string]
+  if ($actionsInWindow -ge $contextCap) {
+    [void]$denies.Add("policy_denied_context_cap")
+  }
+  if ($cooldownSeconds -gt 0 -and $secondsSinceLastAction -lt $cooldownSeconds) {
+    [void]$denies.Add("policy_denied_cooldown")
+  }
+
+  return [pscustomobject]@{
+    allowed = ($denies.Count -eq 0)
+    context_key = $contextKey
+    reason_codes = @($denies.ToArray())
+    context_cap = $contextCap
+    actions_in_window = $actionsInWindow
+    cooldown_seconds = $cooldownSeconds
+    seconds_since_last_action = $secondsSinceLastAction
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -412,6 +546,7 @@ function Invoke-RevenueTaskRoute {
     "followup_draft",
     "calendar_proposal"
   )
+  $policy = Get-DeterministicPolicyDecision -Task $Task
 
   if ($supportedTaskTypes -notcontains $taskType) {
     return [pscustomobject]@{
@@ -419,10 +554,25 @@ function Invoke-RevenueTaskRoute {
       provider_used = "none"
       error = "Unsupported task_type: $taskType"
       artifacts = @()
+      policy = $policy
       route = $null
       offer = $null
       proposal = $null
       reason_codes = @()
+    }
+  }
+
+  if (-not [bool]$policy.allowed) {
+    return [pscustomobject]@{
+      status = "SKIPPED"
+      provider_used = "none"
+      error = "Policy denied action for context: $($policy.context_key)"
+      artifacts = @()
+      policy = $policy
+      route = $null
+      offer = $null
+      proposal = $null
+      reason_codes = @($policy.reason_codes | ForEach-Object { [string]$_ })
     }
   }
 
@@ -462,6 +612,7 @@ function Invoke-RevenueTaskRoute {
         provider_used = "none"
         error = "Unsupported provider_mode: $providerMode"
         artifacts = @()
+        policy = $policy
         route = $null
         offer = $null
         proposal = $null
@@ -482,6 +633,7 @@ function Invoke-RevenueTaskRoute {
     provider_used = [string]$providerResult.provider_used
     error = [string]$providerResult.error
     artifacts = @($providerResult.artifacts | ForEach-Object { [string]$_ })
+    policy = $policy
     route = if ($null -ne $routing) {
       [pscustomobject]@{
         selected_route = [string]$routing.selected_route

@@ -259,6 +259,7 @@ Describe "revenue automation scaffold smoke" {
         "duration_ms",
         "error",
         "artifacts",
+        "policy",
         "offer",
         "proposal"
       )
@@ -491,6 +492,213 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed payload.leads should return FAILED."
       Assert-True -Condition (([string]$run.result.error) -like "*payload.leads must be an array or object.*") -Message "Malformed payload.leads should include routing validation error."
       Assert-True -Condition ($null -eq $run.result.proposal) -Message "Malformed payload.leads must not emit proposal."
+    }
+  }
+
+  Context "9) context-scoped policy guard engine" {
+    It "allows action when under context cap" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-policy-allow"; segment = "saas"; intent = "demo" }
+          )
+          policy_context = [pscustomobject]@{
+            platform = "x"
+            account_id = "acct-001"
+            community_id = "community-allow"
+            action_type = "reply"
+            window_key = "2026021010"
+            context_cap = 3
+            actions_in_window = 1
+            cooldown_seconds = 120
+            seconds_since_last_action = 240
+          }
+        }
+        created_at_utc = "2026-02-10T10:00:00Z"
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Under-cap policy should allow execution."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Allowed policy should keep success path."
+      Assert-True -Condition ($null -ne $run.result.policy) -Message "Result should include policy object."
+      Assert-Equal -Actual ([bool]$run.result.policy.allowed) -Expected $true -Message "Policy should be allowed under cap."
+      Assert-Equal -Actual ([string]$run.result.policy.context_key) -Expected "x|acct-001|community-allow|reply|2026021010" -Message "Policy context key mismatch."
+      Assert-Equal -Actual (@($run.result.policy.reason_codes).Count) -Expected 0 -Message "Allowed policy should have no deny reason codes."
+    }
+
+    It "denies action when context cap is exceeded" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-policy-cap"; segment = "saas" }
+          )
+          policy_context = [pscustomobject]@{
+            platform = "x"
+            account_id = "acct-001"
+            community_id = "community-cap"
+            action_type = "post"
+            window_key = "2026021011"
+            context_cap = 2
+            actions_in_window = 2
+            cooldown_seconds = 0
+            seconds_since_last_action = 999
+          }
+        }
+        created_at_utc = "2026-02-10T11:00:00Z"
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Policy denial should not crash process."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SKIPPED" -Message "Cap denial should return SKIPPED."
+      Assert-Equal -Actual ([bool]$run.result.policy.allowed) -Expected $false -Message "Policy should be denied on cap."
+      Assert-Contains -Collection @($run.result.policy.reason_codes) -Value "policy_denied_context_cap" -Message "Cap denial reason code missing."
+    }
+
+    It "denies action on cooldown window" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-policy-cooldown"; segment = "b2b" }
+          )
+          policy_context = [pscustomobject]@{
+            platform = "reddit"
+            account_id = "acct-002"
+            community_id = "community-cooldown"
+            action_type = "reply"
+            window_key = "2026021012"
+            context_cap = 10
+            actions_in_window = 1
+            cooldown_seconds = 300
+            seconds_since_last_action = 30
+          }
+        }
+        created_at_utc = "2026-02-10T12:00:00Z"
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Cooldown denial should not crash process."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SKIPPED" -Message "Cooldown denial should return SKIPPED."
+      Assert-Equal -Actual ([bool]$run.result.policy.allowed) -Expected $false -Message "Policy should be denied on cooldown."
+      Assert-Contains -Collection @($run.result.policy.reason_codes) -Value "policy_denied_cooldown" -Message "Cooldown denial reason code missing."
+    }
+
+    It "caps contexts independently across communities" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $taskDenied = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @([pscustomobject]@{ lead_id = "lead-community-a"; segment = "saas" })
+          policy_context = [pscustomobject]@{
+            platform = "x"
+            account_id = "acct-003"
+            community_id = "community-a"
+            action_type = "post"
+            window_key = "2026021013"
+            context_cap = 1
+            actions_in_window = 1
+            cooldown_seconds = 0
+            seconds_since_last_action = 1000
+          }
+        }
+        created_at_utc = "2026-02-10T13:00:00Z"
+      }
+      $taskAllowed = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @([pscustomobject]@{ lead_id = "lead-community-b"; segment = "saas" })
+          policy_context = [pscustomobject]@{
+            platform = "x"
+            account_id = "acct-003"
+            community_id = "community-b"
+            action_type = "post"
+            window_key = "2026021013"
+            context_cap = 1
+            actions_in_window = 0
+            cooldown_seconds = 0
+            seconds_since_last_action = 1000
+          }
+        }
+        created_at_utc = "2026-02-10T13:00:00Z"
+      }
+
+      $runDenied = Invoke-RevenueRun -Config $config -Task $taskDenied
+      $runAllowed = Invoke-RevenueRun -Config $config -Task $taskAllowed
+
+      Assert-Equal -Actual ([bool]$runDenied.result.policy.allowed) -Expected $false -Message "Community A should be denied by cap."
+      Assert-Equal -Actual ([bool]$runAllowed.result.policy.allowed) -Expected $true -Message "Community B should remain allowed."
+      Assert-True -Condition ([string]$runDenied.result.policy.context_key -ne [string]$runAllowed.result.policy.context_key) -Message "Different communities must produce different context keys."
+    }
+
+    It "returns deterministic policy output across repeated runs" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          leads = @([pscustomobject]@{ lead_id = "lead-policy-stable"; segment = "saas" })
+          policy_context = [pscustomobject]@{
+            platform = "facebook"
+            account_id = "acct-004"
+            community_id = "community-stable"
+            action_type = "reply"
+            window_key = "2026021014"
+            context_cap = 4
+            actions_in_window = 1
+            cooldown_seconds = 120
+            seconds_since_last_action = 240
+          }
+        }
+        created_at_utc = "2026-02-10T14:00:00Z"
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+      $policy1 = ($run1.result.policy | ConvertTo-Json -Depth 20 -Compress)
+      $policy2 = ($run2.result.policy | ConvertTo-Json -Depth 20 -Compress)
+
+      Assert-Equal -Actual $policy1 -Expected $policy2 -Message "Policy output must remain deterministic across repeated runs."
     }
   }
 }
