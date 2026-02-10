@@ -341,6 +341,65 @@ function Get-DeterministicOfferFromRouting {
   }
 }
 
+function Get-DeterministicProposalFromOffer {
+  param([Parameter(Mandatory = $true)][object]$Offer)
+
+  $tier = ([string](Get-ObjectPropertyValue -Value $Offer -Name "tier")).Trim().ToLowerInvariant()
+  $offerId = ([string](Get-ObjectPropertyValue -Value $Offer -Name "offer_id")).Trim()
+
+  $monthlyPrice = 0
+  $setupFee = 0
+  $monthlyOk = [int]::TryParse([string](Get-ObjectPropertyValue -Value $Offer -Name "monthly_price_usd"), [ref]$monthlyPrice)
+  $setupOk = [int]::TryParse([string](Get-ObjectPropertyValue -Value $Offer -Name "setup_fee_usd"), [ref]$setupFee)
+
+  $allowedTiers = @("free", "starter", "pro")
+  $guardrailApplied = $false
+  if ($allowedTiers -notcontains $tier) { $guardrailApplied = $true }
+  if (-not $monthlyOk -or -not $setupOk) { $guardrailApplied = $true }
+  if ($monthlyPrice -lt 0 -or $setupFee -lt 0) { $guardrailApplied = $true }
+
+  if ([string]::IsNullOrWhiteSpace($offerId)) { $guardrailApplied = $true }
+
+  if ($guardrailApplied) {
+    $tier = "free"
+    $monthlyPrice = 0
+    $setupFee = 0
+    $offerId = "offer-free-guardrail"
+  }
+
+  $headline = switch ($tier) {
+    "pro" { "Priority Revenue Automation Plan" }
+    "starter" { "Starter Revenue Automation Plan" }
+    default { "Free Revenue Automation Plan" }
+  }
+
+  $proposalReason = switch ($tier) {
+    "pro" { "proposal_from_offer_pro" }
+    "starter" { "proposal_from_offer_starter" }
+    default { "proposal_from_offer_free" }
+  }
+
+  $reasonCodes = New-Object System.Collections.Generic.List[string]
+  [void]$reasonCodes.Add($proposalReason)
+  if ($guardrailApplied) {
+    [void]$reasonCodes.Add("proposal_guardrail_applied")
+  }
+
+  $dueNow = [int]($monthlyPrice + $setupFee)
+  $checkoutStub = ("stub://checkout/{0}/{1}" -f $tier, $offerId)
+
+  return [pscustomobject]@{
+    proposal_id = ("proposal-{0}-{1}" -f $tier, $offerId)
+    tier = $tier
+    headline = $headline
+    monthly_price_usd = [int]$monthlyPrice
+    setup_fee_usd = [int]$setupFee
+    due_now_usd = [int]$dueNow
+    checkout_stub = $checkoutStub
+    reason_codes = @($reasonCodes | Select-Object -Unique)
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -362,6 +421,7 @@ function Invoke-RevenueTaskRoute {
       artifacts = @()
       route = $null
       offer = $null
+      proposal = $null
       reason_codes = @()
     }
   }
@@ -381,6 +441,7 @@ function Invoke-RevenueTaskRoute {
           ranked_leads = @()
         }
         offer = $null
+        proposal = $null
         reason_codes = @()
       }
     }
@@ -403,14 +464,17 @@ function Invoke-RevenueTaskRoute {
         artifacts = @()
         route = $null
         offer = $null
+        proposal = $null
         reason_codes = @()
       }
     }
   }
 
   $offer = $null
+  $proposal = $null
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
+    $proposal = Get-DeterministicProposalFromOffer -Offer $offer
   }
 
   return [pscustomobject]@{
@@ -429,6 +493,7 @@ function Invoke-RevenueTaskRoute {
       $null
     }
     offer = $offer
+    proposal = $proposal
     reason_codes = if ($null -ne $routing) { @($routing.reason_codes | ForEach-Object { [string]$_ }) } else { @() }
   }
 }

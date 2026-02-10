@@ -259,7 +259,8 @@ Describe "revenue automation scaffold smoke" {
         "duration_ms",
         "error",
         "artifacts",
-        "offer"
+        "offer",
+        "proposal"
       )
 
       foreach ($field in $requiredFields) {
@@ -354,10 +355,19 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run1.result.offer) -Message "High-priority lead_enrich should emit offer."
       Assert-Equal -Actual ([string]$run1.result.offer.tier) -Expected "pro" -Message "High-priority route should map to pro offer."
       Assert-Contains -Collection @($run1.result.offer.reason_codes) -Value "offer_pro_priority" -Message "Pro offer should include deterministic reason code."
+      Assert-True -Condition ($null -ne $run1.result.proposal) -Message "High-priority lead_enrich should emit proposal."
+      Assert-Equal -Actual ([string]$run1.result.proposal.tier) -Expected "pro" -Message "High-priority offer should map to pro proposal."
+      Assert-Equal -Actual ([int]$run1.result.proposal.monthly_price_usd) -Expected 999 -Message "Pro proposal monthly price mismatch."
+      Assert-Equal -Actual ([int]$run1.result.proposal.setup_fee_usd) -Expected 499 -Message "Pro proposal setup fee mismatch."
+      Assert-Equal -Actual ([int]$run1.result.proposal.due_now_usd) -Expected 1498 -Message "Pro proposal due_now mismatch."
+      Assert-Contains -Collection @($run1.result.proposal.reason_codes) -Value "proposal_from_offer_pro" -Message "Pro proposal should include deterministic reason code."
 
       $offerJson1 = ($run1.result.offer | ConvertTo-Json -Depth 20 -Compress)
       $offerJson2 = ($run2.result.offer | ConvertTo-Json -Depth 20 -Compress)
       Assert-Equal -Actual $offerJson1 -Expected $offerJson2 -Message "Offer payload must remain deterministic across repeated runs."
+      $proposalJson1 = ($run1.result.proposal | ConvertTo-Json -Depth 20 -Compress)
+      $proposalJson2 = ($run2.result.proposal | ConvertTo-Json -Depth 20 -Compress)
+      Assert-Equal -Actual $proposalJson1 -Expected $proposalJson2 -Message "Proposal payload must remain deterministic across repeated runs."
     }
 
     It "uses lead_id ascending tie-break when scores are equal" {
@@ -415,6 +425,12 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run.result.offer) -Message "Medium-priority route should emit offer."
       Assert-Equal -Actual ([string]$run.result.offer.tier) -Expected "starter" -Message "Medium-priority route should map to starter offer."
       Assert-Contains -Collection @($run.result.offer.reason_codes) -Value "offer_starter_nurture" -Message "Starter offer should include deterministic reason code."
+      Assert-True -Condition ($null -ne $run.result.proposal) -Message "Medium-priority route should emit proposal."
+      Assert-Equal -Actual ([string]$run.result.proposal.tier) -Expected "starter" -Message "Medium-priority offer should map to starter proposal."
+      Assert-Equal -Actual ([int]$run.result.proposal.monthly_price_usd) -Expected 299 -Message "Starter proposal monthly price mismatch."
+      Assert-Equal -Actual ([int]$run.result.proposal.setup_fee_usd) -Expected 149 -Message "Starter proposal setup fee mismatch."
+      Assert-Equal -Actual ([int]$run.result.proposal.due_now_usd) -Expected 448 -Message "Starter proposal due_now mismatch."
+      Assert-Contains -Collection @($run.result.proposal.reason_codes) -Value "proposal_from_offer_starter" -Message "Starter proposal should include deterministic reason code."
     }
 
     It "returns free offer for low-priority route" {
@@ -443,6 +459,13 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run.result.offer) -Message "Low-priority route should emit offer."
       Assert-Equal -Actual ([string]$run.result.offer.tier) -Expected "free" -Message "Low-priority route should map to free offer."
       Assert-Contains -Collection @($run.result.offer.reason_codes) -Value "offer_free_low_signal" -Message "Free offer should include deterministic reason code."
+      Assert-True -Condition ($null -ne $run.result.proposal) -Message "Low-priority route should emit proposal."
+      Assert-Equal -Actual ([string]$run.result.proposal.tier) -Expected "free" -Message "Low-priority offer should map to free proposal."
+      Assert-Equal -Actual ([int]$run.result.proposal.monthly_price_usd) -Expected 0 -Message "Free proposal monthly price mismatch."
+      Assert-Equal -Actual ([int]$run.result.proposal.setup_fee_usd) -Expected 0 -Message "Free proposal setup fee mismatch."
+      Assert-Equal -Actual ([int]$run.result.proposal.due_now_usd) -Expected 0 -Message "Free proposal due_now mismatch."
+      Assert-Contains -Collection @($run.result.proposal.reason_codes) -Value "proposal_from_offer_free" -Message "Free proposal should include deterministic reason code."
+      Assert-True -Condition (([string]$run.result.proposal.checkout_stub) -like "stub://checkout/free/*") -Message "Free proposal should use free checkout stub."
     }
 
     It "returns FAILED for malformed payload.leads" {
@@ -467,6 +490,7 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run.result) -Message "Malformed payload.leads should emit result JSON."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed payload.leads should return FAILED."
       Assert-True -Condition (([string]$run.result.error) -like "*payload.leads must be an array or object.*") -Message "Malformed payload.leads should include routing validation error."
+      Assert-True -Condition ($null -eq $run.result.proposal) -Message "Malformed payload.leads must not emit proposal."
     }
   }
 }
