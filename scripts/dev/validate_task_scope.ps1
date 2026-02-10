@@ -48,6 +48,29 @@ if ($allowed.Count -eq 0) {
   exit 2
 }
 
+$invalidScopeEntries = New-Object System.Collections.Generic.List[string]
+foreach ($rule in $allowed) {
+  if ([string]::IsNullOrWhiteSpace($rule)) { continue }
+
+  if ($rule.Contains('*')) {
+    # Wildcard patterns are intentionally allowed without existence checks.
+    continue
+  }
+
+  $literal = $rule.Trim()
+  if ($literal.EndsWith('/')) {
+    $literal = $literal.TrimEnd('/')
+  }
+
+  if ([string]::IsNullOrWhiteSpace($literal)) {
+    continue
+  }
+
+  if (-not (Test-Path -Path $literal -PathType Any)) {
+    [void]$invalidScopeEntries.Add($rule)
+  }
+}
+
 function Test-InScope {
   param(
     [string]$Path,
@@ -121,6 +144,17 @@ if ($checklistDuplicateErrors.Count -gt 0) {
   Write-Host "Duplicate checklist entries detected:"
   foreach ($dup in $checklistDuplicateErrors) {
     Write-Host " - $dup"
+  }
+}
+
+if ($invalidScopeEntries.Count -gt 0) {
+  $hasFailures = $true
+  if ($offending.Count -eq 0 -and $checklistDuplicateErrors.Count -eq 0) {
+    Write-Host "FAIL"
+  }
+  Write-Host "Invalid scope entries detected (literal paths not found):"
+  foreach ($entry in $invalidScopeEntries) {
+    Write-Host " - $entry"
   }
 }
 
