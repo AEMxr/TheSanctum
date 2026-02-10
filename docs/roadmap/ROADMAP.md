@@ -28,6 +28,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
    - required 4-suite Pester gate
    - drift and rollback-anchor reporting
 3. `docs/runtime/RUNTIME_BUDGETS_GTX1660.md` and `docs/runtime/INFERENCE_FALLBACK_POLICY.md` define enforceable local runtime limits and approved fallback/reversion controls.
+4. `docs/security/SECURITY_DRILL_CALENDAR.md` and `docs/security/INCIDENT_RESPONSE_RUNBOOK.md` define recurring resilience drills, recovery targets, and incident-response execution standards.
 
 ## Current Sequence Anchor
 `TASK-RLS-002` establishes normalized execution and reporting semantics before subsequent governance, ops, and revenue card execution.
