@@ -21,6 +21,9 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 1. Keep revenue automation default-off and safe by default.
 2. Expand deterministic fixture coverage for contract reliability.
 3. Preserve non-gating posture for scaffold checks.
+4. Apply weekly API factory monetization using:
+   - `docs/revenue/API_REVENUE_PLAYBOOK_v1.md`
+   - `docs/revenue/PRICING_GUARDRAILS.md`
 
 ## Release and Ops Interface Dependencies
 1. `docs/tasks/TASK_EXECUTION_STANDARD.md` is the canonical execution contract.

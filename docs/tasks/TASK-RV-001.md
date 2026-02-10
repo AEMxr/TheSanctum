@@ -1,48 +1,46 @@
-﻿# TASK-RV-001 — Revenue Fixture Pack and Deterministic Replay Runner
+﻿# TASK-RV-001 - API revenue playbook v1 (weekly API factory monetization)
 
 ## Objective lane
-Revenue Plane
+Revenue Automation
 
 ## Goal (single measurable outcome)
-Add a deterministic fixture pack and replay command that runs revenue scaffold tasks through `index.ps1` and validates expected status/output contract per fixture.
+Operationalize weekly API monetization with clear packaging, pricing, and conversion gates.
 
 ## Scope (allowed files)
-- `apps/revenue_automation/fixtures/*.json`
-- `apps/revenue_automation/scripts/replay_fixtures.ps1`
-- `apps/revenue_automation/tests/revenue_automation.smoke.Tests.ps1`
+- `docs/revenue/API_REVENUE_PLAYBOOK_v1.md`
+- `docs/revenue/PRICING_GUARDRAILS.md`
+- `docs/roadmap/ROADMAP.md`
 - `docs/tasks/TASK-RV-001.md`
-- `docs/phase1_revenue_scaffold.md`
 
 ## Non-goals
-- No changes to release-gate runtime semantics, schema defaults, or control-plane tests.
-- No live HTTP provider execution.
-- No default flag changes (`enable_revenue_automation=false`, `safe_mode=true`, `dry_run=true`).
-- No CI gating changes.
+- No Stripe integration code.
+- No CRM implementation.
+- No control-plane runtime or schema changes.
 
 ## Acceptance checklist
-- [ ] Fixture envelopes added for known task types and at least one unknown task type.
-- [ ] Replay script executes fixtures deterministically in safe/dry-run mode.
-- [ ] Replay output includes per-fixture status and contract validation result.
-- [ ] Existing revenue smoke suite remains green (no semantics drift).
-- [ ] Existing control-plane suites remain unchanged and green.
-- [ ] Phase 1 docs include fixture/replay usage and safety notes.
+- [ ] Weekly offer template is documented (free/pro/overage).
+- [ ] "First 3 paying users" process is documented.
+- [ ] KPI thresholds for progression are documented.
+- [ ] 1 API/week milestone rule is explicitly referenced.
+- [ ] Pricing guardrails include floor/ceiling and anti-abuse limits.
+- [ ] `docs/roadmap/ROADMAP.md` links revenue gate to weekly API factory.
+- [ ] Required validation sequence passes with no drift.
 
 ## Deliverables (SHA, diff summary)
 - Commit SHA(s):
 - Diff summary:
-  - Added fixture set and replay script.
-  - Updated smoke coverage and docs for deterministic replay path.
 
 ## Rollback anchor
-- Tag: `phase1-revenue-scaffold-v0`
+- `rollback/TASK-RV-001-pre`
 
 ## Execution notes
-- Local replay example:
-  - `pwsh -File apps/revenue_automation/scripts/replay_fixtures.ps1 -ConfigPath apps/revenue_automation/config.example.json`
-- Required validation:
-  - `Invoke-Pester apps/revenue_automation/tests/revenue_automation.smoke.Tests.ps1 -EnableExit`
+- Validate staged scope first:
+  - `git diff --name-only --cached`
+  - `pwsh -File scripts/dev/validate_task_scope.ps1 -TaskFile docs/tasks/TASK-RV-001.md -ChangedFiles <cached_files>`
+- Run required suites:
   - `Invoke-Pester tests/run_staging_v2_3.Tests.ps1 -EnableExit`
   - `Invoke-Pester tests/run_release_candidate.Tests.ps1 -EnableExit`
   - `Invoke-Pester tests/release_gate_helpers.Tests.ps1 -EnableExit`
-- Next first command:
-  - `git diff --name-only --cached`
+  - `Invoke-Pester apps/revenue_automation/tests/revenue_automation.smoke.Tests.ps1 -EnableExit`
+- Commit message:
+  - `feat(revenue): define weekly api revenue playbook and pricing guardrails (TASK-RV-001)`
