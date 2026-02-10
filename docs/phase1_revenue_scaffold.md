@@ -24,6 +24,17 @@ pwsh -File apps/revenue_automation/scripts/replay_fixtures.ps1 -ConfigPath apps/
 
 Fixture replay writes a summary JSON to `apps/revenue_automation/artifacts/replay/replay_summary.json` by default and exits non-zero if any fixture fails contract or expected status checks.
 
+Fixture categories in `apps/revenue_automation/fixtures`:
+1. Known success paths (`lead_enrich`, `followup_draft`, `calendar_proposal`) expected `SUCCESS`.
+2. Unsupported task type expected `SKIPPED`.
+3. Invalid envelope cases (for example invalid `created_at_utc`) expected `FAILED`.
+4. Missing required field cases (for example missing `payload`) expected `FAILED`.
+
+Failure semantics:
+1. Replay is deterministic and evaluates each fixture against expected status and expected exit code.
+2. A fixture fails replay when output contract is invalid, status mismatches, or exit code mismatches.
+3. Any failing fixture makes replay exit non-zero to prevent silent drift.
+
 ## Safety Model
 1. `enable_revenue_automation` is `false` by default.
 2. `safe_mode=true` prevents HTTP provider execution.

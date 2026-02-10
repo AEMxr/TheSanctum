@@ -1,0 +1,7 @@
+{
+  "task_id": "fixture-missing-payload-001",
+  "task_type": "followup_draft",
+  "created_at_utc": "2026-02-10T00:04:00Z",
+  "expected_status": "FAILED",
+  "expected_exit_code": 1
+}

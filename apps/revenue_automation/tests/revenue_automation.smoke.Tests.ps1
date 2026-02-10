@@ -189,7 +189,54 @@ Describe "revenue automation scaffold smoke" {
     }
   }
 
-  Context "5) output contract" {
+  Context "5) negative-path contract behavior" {
+    It "returns FAILED for missing payload envelope" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Missing payload should return process exit 1."
+      Assert-True -Condition ($null -ne $run.result) -Message "Missing payload should emit result JSON."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Missing payload should return FAILED."
+      Assert-True -Condition (([string]$run.result.error) -like "*payload is required*") -Message "Missing payload should include validation error."
+    }
+
+    It "returns FAILED for invalid created_at_utc envelope" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "followup_draft"
+        payload = [pscustomobject]@{
+          lead_id = "lead-err-001"
+        }
+        created_at_utc = "bad-date"
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Invalid created_at_utc should return process exit 1."
+      Assert-True -Condition ($null -ne $run.result) -Message "Invalid created_at_utc should emit result JSON."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Invalid created_at_utc should return FAILED."
+      Assert-True -Condition (([string]$run.result.error) -like "*created_at_utc*") -Message "Invalid created_at_utc should include validation error."
+    }
+  }
+
+  Context "6) output contract" {
     It "contains required fields and expected value types" {
       $config = [pscustomobject]@{
         enable_revenue_automation = $true
@@ -229,7 +276,7 @@ Describe "revenue automation scaffold smoke" {
     }
   }
 
-  Context "6) fixture replay runner" {
+  Context "7) fixture replay runner" {
     It "replays fixtures deterministically in safe/dry mode" {
       $replaySummaryPath = Join-Path $script:TestTempDir ("replay_summary_" + [guid]::NewGuid().ToString("N") + ".json")
 
@@ -244,7 +291,23 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([bool]$summary.safe_mode) -Expected $true -Message "Replay must enforce safe_mode=true."
       Assert-Equal -Actual ([bool]$summary.dry_run) -Expected $true -Message "Replay must enforce dry_run=true."
       Assert-Equal -Actual ([int]$summary.failed) -Expected 0 -Message "Fixture replay should not have failed fixtures."
-      Assert-True -Condition (@($summary.results).Count -ge 4) -Message "Fixture replay should include all fixture results."
+      Assert-True -Condition (@($summary.results).Count -ge 6) -Message "Fixture replay should include all fixture results."
+
+      $missingPayload = @($summary.results | Where-Object { $_.fixture -eq "task_missing_payload.json" } | Select-Object -First 1)
+      Assert-True -Condition ($missingPayload.Count -eq 1) -Message "Replay should include task_missing_payload.json."
+      Assert-Equal -Actual ([string]$missingPayload[0].expected_status) -Expected "FAILED" -Message "task_missing_payload expected_status mismatch."
+      Assert-Equal -Actual ([string]$missingPayload[0].actual_status) -Expected "FAILED" -Message "task_missing_payload actual_status mismatch."
+      Assert-Equal -Actual ([int]$missingPayload[0].expected_exit_code) -Expected 1 -Message "task_missing_payload expected_exit_code mismatch."
+      Assert-Equal -Actual ([int]$missingPayload[0].exit_code) -Expected 1 -Message "task_missing_payload exit_code mismatch."
+      Assert-Equal -Actual ([bool]$missingPayload[0].pass) -Expected $true -Message "task_missing_payload should pass replay expectation."
+
+      $invalidCreatedAt = @($summary.results | Where-Object { $_.fixture -eq "task_invalid_created_at.json" } | Select-Object -First 1)
+      Assert-True -Condition ($invalidCreatedAt.Count -eq 1) -Message "Replay should include task_invalid_created_at.json."
+      Assert-Equal -Actual ([string]$invalidCreatedAt[0].expected_status) -Expected "FAILED" -Message "task_invalid_created_at expected_status mismatch."
+      Assert-Equal -Actual ([string]$invalidCreatedAt[0].actual_status) -Expected "FAILED" -Message "task_invalid_created_at actual_status mismatch."
+      Assert-Equal -Actual ([int]$invalidCreatedAt[0].expected_exit_code) -Expected 1 -Message "task_invalid_created_at expected_exit_code mismatch."
+      Assert-Equal -Actual ([int]$invalidCreatedAt[0].exit_code) -Expected 1 -Message "task_invalid_created_at exit_code mismatch."
+      Assert-Equal -Actual ([bool]$invalidCreatedAt[0].pass) -Expected $true -Message "task_invalid_created_at should pass replay expectation."
     }
   }
 }

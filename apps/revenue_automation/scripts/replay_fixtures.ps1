@@ -41,8 +41,10 @@ function Read-JsonFile {
 
 function Parse-StrictBool {
   param([object]$Value, [bool]$DefaultValue)
+
   if ($null -eq $Value) { return $DefaultValue }
   if ($Value -is [bool]) { return [bool]$Value }
+
   $s = ([string]$Value).Trim().ToLowerInvariant()
   switch ($s) {
     "true" { return $true }
@@ -51,26 +53,11 @@ function Parse-StrictBool {
   }
 }
 
-function Get-ExpectedStatus {
-  param(
-    [string]$TaskType,
-    [string]$ProviderMode
-  )
-
-  $known = @("lead_enrich", "followup_draft", "calendar_proposal")
-  if ($known -notcontains $TaskType) { return "SKIPPED" }
-
-  if ($ProviderMode -eq "http") {
-    return "SKIPPED"
-  }
-
-  return "SUCCESS"
-}
-
 function Test-OutputContract {
   param([object]$Result)
 
   if ($null -eq $Result) { return $false }
+
   $required = @(
     "task_id",
     "status",
@@ -96,6 +83,50 @@ function Test-OutputContract {
   if ($tmpDuration -lt 0) { return $false }
 
   return $true
+}
+
+function Get-ExpectedOutcome {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][string]$ProviderMode
+  )
+
+  $expectedStatus = ""
+  if ($Task.PSObject.Properties.Name -contains "expected_status" -and -not [string]::IsNullOrWhiteSpace([string]$Task.expected_status)) {
+    $expectedStatus = ([string]$Task.expected_status).Trim().ToUpperInvariant()
+  }
+
+  if ([string]::IsNullOrWhiteSpace($expectedStatus)) {
+    $known = @("lead_enrich", "followup_draft", "calendar_proposal")
+    $taskType = [string]$Task.task_type
+    if ($known -notcontains $taskType) {
+      $expectedStatus = "SKIPPED"
+    }
+    elseif ($ProviderMode -eq "http") {
+      $expectedStatus = "SKIPPED"
+    }
+    else {
+      $expectedStatus = "SUCCESS"
+    }
+  }
+
+  if ($expectedStatus -notin @("SUCCESS", "FAILED", "SKIPPED")) {
+    throw "Fixture expected_status must be one of SUCCESS|FAILED|SKIPPED (task_id=$($Task.task_id), got '$expectedStatus')"
+  }
+
+  $expectedExitCode = if ($expectedStatus -eq "FAILED") { 1 } else { 0 }
+  if ($Task.PSObject.Properties.Name -contains "expected_exit_code") {
+    $tmpExpected = 0
+    if (-not [int]::TryParse([string]$Task.expected_exit_code, [ref]$tmpExpected)) {
+      throw "Fixture expected_exit_code must be integer-like (task_id=$($Task.task_id), got '$($Task.expected_exit_code)')"
+    }
+    $expectedExitCode = $tmpExpected
+  }
+
+  return [pscustomobject]@{
+    status = $expectedStatus
+    exit_code = $expectedExitCode
+  }
 }
 
 try {
@@ -140,7 +171,7 @@ if (-not [string]::IsNullOrWhiteSpace($outputDir) -and -not (Test-Path -Path $ou
 $runtimeConfigPath = Join-Path $outputDir "replay_runtime_config.json"
 $runtimeConfig | ConvertTo-Json -Depth 20 | Set-Content -Path $runtimeConfigPath -Encoding UTF8
 
-$pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+$powerShellExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
 $fixtures = @(Get-ChildItem -Path $FixturesDir -Filter *.json -File | Sort-Object Name)
 if ($fixtures.Count -eq 0) {
   Write-Error "No fixture JSON files found in $FixturesDir"
@@ -148,7 +179,6 @@ if ($fixtures.Count -eq 0) {
 }
 
 $results = New-Object System.Collections.Generic.List[object]
-$failedCount = 0
 
 foreach ($fixture in $fixtures) {
   $fixtureTask = $null
@@ -156,11 +186,11 @@ foreach ($fixture in $fixtures) {
     $fixtureTask = Read-JsonFile -Path $fixture.FullName
   }
   catch {
-    $failedCount++
     [void]$results.Add([pscustomobject]@{
       fixture = $fixture.Name
       expected_status = "UNKNOWN"
       actual_status = "FAILED"
+      expected_exit_code = -1
       exit_code = -1
       contract_ok = $false
       pass = $false
@@ -169,8 +199,25 @@ foreach ($fixture in $fixtures) {
     continue
   }
 
-  $expectedStatus = Get-ExpectedStatus -TaskType ([string]$fixtureTask.task_type) -ProviderMode $providerMode
-  $outputLines = @(& $pwshExe -NoProfile -ExecutionPolicy Bypass -File $indexPath -ConfigPath $runtimeConfigPath -TaskPath $fixture.FullName 2>&1)
+  $expected = $null
+  try {
+    $expected = Get-ExpectedOutcome -Task $fixtureTask -ProviderMode $providerMode
+  }
+  catch {
+    [void]$results.Add([pscustomobject]@{
+      fixture = $fixture.Name
+      expected_status = "UNKNOWN"
+      actual_status = "FAILED"
+      expected_exit_code = -1
+      exit_code = -1
+      contract_ok = $false
+      pass = $false
+      message = $_.Exception.Message
+    })
+    continue
+  }
+
+  $outputLines = @(& $powerShellExe -NoProfile -ExecutionPolicy Bypass -File $indexPath -ConfigPath $runtimeConfigPath -TaskPath $fixture.FullName 2>&1)
   $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
   $jsonLine = @($outputLines | ForEach-Object { [string]$_ } | Where-Object { $_.Trim().StartsWith("{") -and $_.Trim().EndsWith("}") } | Select-Object -Last 1)
 
@@ -186,22 +233,21 @@ foreach ($fixture in $fixtures) {
 
   $contractOk = Test-OutputContract -Result $resultObj
   $actualStatus = if ($null -ne $resultObj) { [string]$resultObj.status } else { "" }
-  $statusMatch = ($actualStatus -eq $expectedStatus)
-  $exitMatch = ($exitCode -eq 0)
+  $statusMatch = ($actualStatus -eq [string]$expected.status)
+  $exitMatch = ($exitCode -eq [int]$expected.exit_code)
   $passed = ($contractOk -and $statusMatch -and $exitMatch)
 
-  if (-not $passed) { $failedCount++ }
-
-  $message = ""
-  if (-not $contractOk) { $message += "contract_check_failed;" }
-  if (-not $statusMatch) { $message += "status_mismatch(expected=$expectedStatus actual=$actualStatus);" }
-  if (-not $exitMatch) { $message += "exit_code_mismatch(exit=$exitCode);" }
-  if ([string]::IsNullOrWhiteSpace($message)) { $message = "ok" }
+  $messageParts = New-Object System.Collections.Generic.List[string]
+  if (-not $contractOk) { [void]$messageParts.Add("contract_check_failed") }
+  if (-not $statusMatch) { [void]$messageParts.Add("status_mismatch(expected=$([string]$expected.status) actual=$actualStatus)") }
+  if (-not $exitMatch) { [void]$messageParts.Add("exit_code_mismatch(expected=$([int]$expected.exit_code) actual=$exitCode)") }
+  $message = if ($messageParts.Count -eq 0) { "ok" } else { ($messageParts -join ";") }
 
   [void]$results.Add([pscustomobject]@{
     fixture = $fixture.Name
-    expected_status = $expectedStatus
+    expected_status = [string]$expected.status
     actual_status = $actualStatus
+    expected_exit_code = [int]$expected.exit_code
     exit_code = $exitCode
     contract_ok = $contractOk
     pass = $passed
@@ -209,28 +255,26 @@ foreach ($fixture in $fixtures) {
   })
 }
 
-$passedCount = 0
-foreach ($item in $results) {
-  if ([bool]$item.pass) {
-    $passedCount++
-  }
+$resultArray = @($results.ToArray())
+$failedCount = @($resultArray | Where-Object { -not [bool]$_.pass }).Count
+$passedCount = @($resultArray | Where-Object { [bool]$_.pass }).Count
+
+$summary = [pscustomobject]@{
+  generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+  config_path = (Resolve-Path -LiteralPath $ConfigPath).Path
+  runtime_config_path = $runtimeConfigPath
+  fixtures_dir = (Resolve-Path -LiteralPath $FixturesDir).Path
+  provider_mode = $providerMode
+  safe_mode = $runtimeConfig.safe_mode
+  dry_run = $runtimeConfig.dry_run
+  total = $resultArray.Count
+  passed = $passedCount
+  failed = $failedCount
+  results = $resultArray
 }
 
-$summary = New-Object psobject
-$summary | Add-Member -NotePropertyName generated_at_utc -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o"))
-$summary | Add-Member -NotePropertyName config_path -NotePropertyValue ((Resolve-Path -LiteralPath $ConfigPath).Path)
-$summary | Add-Member -NotePropertyName runtime_config_path -NotePropertyValue $runtimeConfigPath
-$summary | Add-Member -NotePropertyName fixtures_dir -NotePropertyValue ((Resolve-Path -LiteralPath $FixturesDir).Path)
-$summary | Add-Member -NotePropertyName provider_mode -NotePropertyValue $providerMode
-$summary | Add-Member -NotePropertyName safe_mode -NotePropertyValue $runtimeConfig.safe_mode
-$summary | Add-Member -NotePropertyName dry_run -NotePropertyValue $runtimeConfig.dry_run
-$summary | Add-Member -NotePropertyName total -NotePropertyValue $results.Count
-$summary | Add-Member -NotePropertyName passed -NotePropertyValue $passedCount
-$summary | Add-Member -NotePropertyName failed -NotePropertyValue $failedCount
-$summary | Add-Member -NotePropertyName results -NotePropertyValue @($results.ToArray())
-
 $summary | ConvertTo-Json -Depth 30 | Set-Content -Path $OutputPath -Encoding UTF8
-$results | Format-Table fixture, expected_status, actual_status, contract_ok, pass -AutoSize | Out-String | Write-Host
+$resultArray | Format-Table fixture, expected_status, actual_status, expected_exit_code, exit_code, contract_ok, pass -AutoSize | Out-String | Write-Host
 Write-Host "Replay summary written to: $OutputPath"
 
 if ($failedCount -gt 0) {
