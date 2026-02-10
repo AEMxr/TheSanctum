@@ -15,6 +15,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
 4. `docs/data/MEMORY_GOVERNANCE_AND_DRIFT_CONTROL.md` and `docs/data/TRAINING_LINEAGE_STANDARD.md` define memory promotion, contradiction quarantine, and lineage gates required before training-candidate promotion.
 5. `docs/security/LINEAGE_PRODUCT_ISOLATION_POLICY.md` and `docs/security/KEY_DOMAIN_SEPARATION.md` enforce lineage/product trust boundaries and key-domain separation requirements for governance-safe evolution.
 6. `docs/governance/AGENT_TOOL_RISK_MATRIX.md` and `docs/governance/TOOL_EXECUTION_GUARDRAILS.md` define tool-tier approvals, deny conditions, and auto-stop escalation controls.
+7. `docs/governance/POLICY_LIFECYCLE_AND_MUTATION_CONTROLS.md` defines signed lifecycle hard gates for policy mutation and release eligibility.
 
 ## Active Revenue Priorities
 1. Keep revenue automation default-off and safe by default.
@@ -29,6 +30,7 @@ Track lane-specific delivery while preserving release-gate and execution-governa
    - drift and rollback-anchor reporting
 3. `docs/runtime/RUNTIME_BUDGETS_GTX1660.md` and `docs/runtime/INFERENCE_FALLBACK_POLICY.md` define enforceable local runtime limits and approved fallback/reversion controls.
 4. `docs/security/SECURITY_DRILL_CALENDAR.md` and `docs/security/INCIDENT_RESPONSE_RUNBOOK.md` define recurring resilience drills, recovery targets, and incident-response execution standards.
+5. Policy mutation lifecycle verification is a release hard gate for governance-affecting changes.
 
 ## Current Sequence Anchor
 `TASK-RLS-002` establishes normalized execution and reporting semantics before subsequent governance, ops, and revenue card execution.

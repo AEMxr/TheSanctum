@@ -1,4 +1,4 @@
-# Release Promotion Checklist (v2.3)
+﻿# Release Promotion Checklist (v2.3)
 
 ## Purpose
 Promote only when staging evidence is real, complete, and clean under strict gate semantics.
@@ -56,6 +56,13 @@ Promotion is valid only if all are true:
 3. `verify_evidence_report.strict.json`:
    - `verdict == "RC-STAGING-READY"`
    - `blocker_count == 0`
+
+## Policy Lifecycle Verification Checkpoint (Required)
+Before release promotion approval:
+1. Confirm `docs/governance/POLICY_LIFECYCLE_AND_MUTATION_CONTROLS.md` lifecycle is complete for policy mutations in scope.
+2. Confirm policy delta signatures and quorum approvals are present and linked to deployed version.
+3. Confirm no unsigned policy deltas are present in the promotion set.
+4. Block promotion on any missing lifecycle evidence.
 
 ## Task Execution and Reporting Gate (Required)
 Before final promotion sign-off for a task-driven change set:
