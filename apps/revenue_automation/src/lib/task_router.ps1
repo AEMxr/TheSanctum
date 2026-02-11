@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $taskRouterScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
 . (Join-Path $taskRouterScriptRoot "providers\mock_provider.ps1")
 . (Join-Path $taskRouterScriptRoot "providers\http_provider.ps1")
+. (Join-Path $taskRouterScriptRoot "multilingual_templates.ps1")
 
 function Test-ObjectLike {
   param([object]$Value)
@@ -623,9 +624,13 @@ function Invoke-RevenueTaskRoute {
 
   $offer = $null
   $proposal = $null
+  $templateReasonCodes = @()
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
     $proposal = Get-DeterministicProposalFromOffer -Offer $offer
+    $localizedProposal = Merge-ProposalWithLocalizedTemplates -Task $Task -Proposal $proposal
+    $proposal = $localizedProposal.proposal
+    $templateReasonCodes = @($localizedProposal.reason_codes | ForEach-Object { [string]$_ })
   }
 
   return [pscustomobject]@{
@@ -646,6 +651,14 @@ function Invoke-RevenueTaskRoute {
     }
     offer = $offer
     proposal = $proposal
-    reason_codes = if ($null -ne $routing) { @($routing.reason_codes | ForEach-Object { [string]$_ }) } else { @() }
+    reason_codes = if ($null -ne $routing) {
+      @(
+        @($routing.reason_codes | ForEach-Object { [string]$_ }) +
+        @($templateReasonCodes | ForEach-Object { [string]$_ })
+      ) | Select-Object -Unique
+    }
+    else {
+      @()
+    }
   }
 }

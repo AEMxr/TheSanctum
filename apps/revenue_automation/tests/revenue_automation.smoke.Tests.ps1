@@ -701,4 +701,99 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $policy1 -Expected $policy2 -Message "Policy output must remain deterministic across repeated runs."
     }
   }
+
+  Context "10) multilingual template engine" {
+    It "emits deterministic native-language templates for spanish input" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "es-MX"
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-es-001"; segment = "saas"; pain_match = $true; budget = 2000; engagement_score = 75 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Spanish template run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Spanish template run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.proposal) -Message "Spanish template run should emit proposal."
+      Assert-Equal -Actual ([string]$run1.result.proposal.template_language) -Expected "es" -Message "Spanish template should use native language."
+      Assert-Contains -Collection @($run1.result.proposal.reason_codes) -Value "template_lang_native" -Message "Spanish template should include native reason code."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.ad_copy)) -Message "Spanish template should include ad_copy."
+      Assert-True -Condition (@($run1.result.proposal.short_reply_templates).Count -gt 0) -Message "Spanish template should include short replies."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.cta_buy_text)) -Message "Spanish template should include buy CTA text."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.cta_subscribe_text)) -Message "Spanish template should include subscribe CTA text."
+
+      $proposal1 = ($run1.result.proposal | ConvertTo-Json -Depth 30 -Compress)
+      $proposal2 = ($run2.result.proposal | ConvertTo-Json -Depth 30 -Compress)
+      Assert-Equal -Actual $proposal1 -Expected $proposal2 -Message "Spanish template payload should be deterministic across repeated runs."
+    }
+
+    It "falls back to english templates for unsupported language with deterministic reason code" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          detected_language = "it-IT"
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-it-001"; segment = "saas"; pain_match = $true; budget = 2000; engagement_score = 75 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Fallback language run should exit 0."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Fallback language run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run.result.proposal) -Message "Fallback language run should emit proposal."
+      Assert-Equal -Actual ([string]$run.result.proposal.template_language) -Expected "en" -Message "Unsupported language should fallback to en templates."
+      Assert-Contains -Collection @($run.result.proposal.reason_codes) -Value "template_lang_fallback_en" -Message "Fallback language run should include fallback reason code."
+    }
+
+    It "preserves clean FAILED behavior for malformed lead payloads without proposal templates" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "es"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should still exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should remain FAILED."
+      Assert-True -Condition ($null -eq $run.result.proposal) -Message "Malformed lead payload must not emit proposal/template fields."
+    }
+  }
 }
