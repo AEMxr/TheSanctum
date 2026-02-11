@@ -265,7 +265,8 @@ Describe "revenue automation scaffold smoke" {
         "telemetry_event_stub",
         "telemetry_event",
         "campaign_packet",
-        "dispatch_plan"
+        "dispatch_plan",
+        "delivery_manifest"
       )
 
       foreach ($field in $requiredFields) {
@@ -1174,6 +1175,117 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.dispatch_plan) -Message "Malformed lead payload must not emit dispatch_plan."
+    }
+  }
+
+  Context "15) deterministic delivery manifest contract" {
+    It "emits deterministic delivery_manifest with ordered actions, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv012-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 910; conversion_bps = 270; impressions = 650 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv012-001"; segment = "saas"; pain_match = $true; budget = 2700; engagement_score = 83 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Delivery manifest run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Delivery manifest run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.delivery_manifest) -Message "Successful lead_enrich should emit delivery_manifest."
+
+      $manifest = $run1.result.delivery_manifest
+      $requiredManifestFields = @(
+        "delivery_id",
+        "dispatch_id",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "actions",
+        "reason_codes"
+      )
+      foreach ($field in $requiredManifestFields) {
+        Assert-True -Condition ($manifest.PSObject.Properties.Name -contains $field) -Message "delivery_manifest missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$manifest.dispatch_id) -Expected ([string]$run1.result.dispatch_plan.dispatch_id) -Message "delivery_manifest dispatch_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.campaign_id) -Expected ([string]$run1.result.dispatch_plan.campaign_id) -Message "delivery_manifest campaign_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.channel) -Expected ([string]$run1.result.dispatch_plan.channel) -Message "delivery_manifest channel mismatch."
+      Assert-Equal -Actual ([string]$manifest.language_code) -Expected ([string]$run1.result.dispatch_plan.language_code) -Message "delivery_manifest language_code mismatch."
+      Assert-Equal -Actual ([string]$manifest.selected_variant_id) -Expected ([string]$run1.result.dispatch_plan.selected_variant_id) -Message "delivery_manifest variant mismatch."
+      Assert-Equal -Actual ([string]$manifest.provider_mode) -Expected "mock" -Message "delivery_manifest provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$manifest.dry_run) -Expected $true -Message "delivery_manifest dry_run mismatch."
+
+      $actions = @($manifest.actions)
+      Assert-Equal -Actual $actions.Count -Expected 2 -Message "delivery_manifest actions should contain exactly two entries."
+      Assert-Equal -Actual ([string]$actions[0].action_type) -Expected "cta_buy" -Message "delivery_manifest action ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$actions[1].action_type) -Expected "cta_subscribe" -Message "delivery_manifest action ordering mismatch for cta_subscribe."
+      Assert-Equal -Actual ([string]$actions[0].action_stub) -Expected ([string]$run1.result.dispatch_plan.cta_buy_stub) -Message "delivery_manifest buy action stub mismatch."
+      Assert-Equal -Actual ([string]$actions[1].action_stub) -Expected ([string]$run1.result.dispatch_plan.cta_subscribe_stub) -Message "delivery_manifest subscribe action stub mismatch."
+      Assert-Equal -Actual ([string]$actions[0].ad_copy) -Expected ([string]$run1.result.dispatch_plan.ad_copy) -Message "delivery_manifest ad_copy mapping mismatch."
+      Assert-Equal -Actual ([string]$actions[0].reply_template) -Expected ([string]$run1.result.dispatch_plan.reply_template) -Message "delivery_manifest reply_template mapping mismatch."
+
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "delivery_manifest_emitted" -Message "delivery_manifest should include emission reason code."
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "template_lang_native" -Message "delivery_manifest should include template lineage."
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "variant_lang_perf_win" -Message "delivery_manifest should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($manifest.PSObject.Properties.Name -contains $forbidden)) -Message "delivery_manifest must not expose $forbidden."
+      }
+
+      $manifestJson1 = ($run1.result.delivery_manifest | ConvertTo-Json -Depth 40 -Compress)
+      $manifestJson2 = ($run2.result.delivery_manifest | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $manifestJson1 -Expected $manifestJson2 -Message "delivery_manifest must remain deterministic across repeated runs."
+    }
+
+    It "does not emit delivery_manifest for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.delivery_manifest) -Message "Malformed lead payload must not emit delivery_manifest."
     }
   }
 }

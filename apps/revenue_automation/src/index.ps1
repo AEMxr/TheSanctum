@@ -182,6 +182,7 @@ $result = [pscustomobject]@{
   telemetry_event = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event") { $routeResult.telemetry_event } else { $null }
   campaign_packet = if ($routeResult.PSObject.Properties.Name -contains "campaign_packet") { $routeResult.campaign_packet } else { $null }
   dispatch_plan = if ($routeResult.PSObject.Properties.Name -contains "dispatch_plan") { $routeResult.dispatch_plan } else { $null }
+  delivery_manifest = if ($routeResult.PSObject.Properties.Name -contains "delivery_manifest") { $routeResult.delivery_manifest } else { $null }
 }
 
 if ($config.emit_telemetry) {
