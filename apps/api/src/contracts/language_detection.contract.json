@@ -1,0 +1,61 @@
+{
+  "contract_name": "language_detection",
+  "contract_version": "v1",
+  "summary": "Deterministic language detection contract for inbound context text.",
+  "request": {
+    "required": [
+      "input_text",
+      "source_channel"
+    ],
+    "properties": {
+      "input_text": {
+        "type": "string",
+        "description": "Raw inbound text to analyze."
+      },
+      "source_channel": {
+        "type": "string",
+        "description": "Channel identifier for attribution (e.g. reddit/x/web)."
+      }
+    }
+  },
+  "response": {
+    "required": [
+      "input_text",
+      "source_channel",
+      "detected_language",
+      "confidence_band",
+      "reason_codes"
+    ],
+    "properties": {
+      "input_text": {
+        "type": "string"
+      },
+      "source_channel": {
+        "type": "string"
+      },
+      "detected_language": {
+        "type": "string",
+        "description": "ISO language code when confidently resolved; und for unknown/ambiguous."
+      },
+      "confidence_band": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "reason_codes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "determinism_notes": [
+    "No randomness is allowed in detection.",
+    "Unknown or ambiguous text must resolve to detected_language=und.",
+    "Tie-break logic is deterministic by score and language code order."
+  ]
+}
