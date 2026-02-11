@@ -1,0 +1,71 @@
+{
+  "schema_version": "v1",
+  "default_profile": "en",
+  "profiles": {
+    "en": {
+      "tone_style": "clear_direct",
+      "cta_style": "action_now",
+      "prohibited_patterns": [
+        "guaranteed income",
+        "risk free forever",
+        "instant millions"
+      ],
+      "default_currency": "USD",
+      "reason_codes": [
+        "profile_en_base"
+      ]
+    },
+    "es": {
+      "tone_style": "friendly_direct",
+      "cta_style": "benefit_first",
+      "prohibited_patterns": [
+        "dinero garantizado",
+        "sin riesgo para siempre",
+        "millones instantaneos"
+      ],
+      "default_currency": "USD",
+      "reason_codes": [
+        "profile_es_base"
+      ]
+    },
+    "pt": {
+      "tone_style": "consultative",
+      "cta_style": "clarity_first",
+      "prohibited_patterns": [
+        "dinheiro garantido",
+        "sem risco para sempre",
+        "milhoes instantaneos"
+      ],
+      "default_currency": "USD",
+      "reason_codes": [
+        "profile_pt_base"
+      ]
+    },
+    "fr": {
+      "tone_style": "professional_concise",
+      "cta_style": "value_first",
+      "prohibited_patterns": [
+        "revenu garanti",
+        "sans risque pour toujours",
+        "millions instantanes"
+      ],
+      "default_currency": "EUR",
+      "reason_codes": [
+        "profile_fr_base"
+      ]
+    },
+    "de": {
+      "tone_style": "structured_formal",
+      "cta_style": "proof_first",
+      "prohibited_patterns": [
+        "garantiertes einkommen",
+        "risikofrei fuer immer",
+        "sofort millionen"
+      ],
+      "default_currency": "EUR",
+      "reason_codes": [
+        "profile_de_base"
+      ]
+    }
+  }
+}
