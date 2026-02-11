@@ -921,6 +921,84 @@ function Get-DeterministicDeliveryManifest {
   }
 }
 
+function Get-DeterministicSenderEnvelope {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][object]$DeliveryManifest,
+    [string[]]$ReasonCodes = @()
+  )
+
+  $taskId = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
+  if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = "task-unknown" }
+
+  $deliveryId = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "delivery_id")
+  if ([string]::IsNullOrWhiteSpace($deliveryId)) { $deliveryId = "delivery-unknown" }
+  $dispatchId = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "dispatch_id")
+  if ([string]::IsNullOrWhiteSpace($dispatchId)) { $dispatchId = "dispatch-unknown" }
+  $campaignId = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+  $channel = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "channel")
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "web" }
+  $languageCode = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "language_code")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  $selectedVariantId = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "selected_variant_id")
+  $providerMode = [string](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "provider_mode")
+  if ([string]::IsNullOrWhiteSpace($providerMode)) { $providerMode = "mock" }
+  $dryRun = [bool](Get-ObjectPropertyValue -Value $DeliveryManifest -Name "dry_run")
+
+  $actionsByType = @{}
+  foreach ($a in @((Get-ObjectPropertyValue -Value $DeliveryManifest -Name "actions"))) {
+    if ($null -eq $a) { continue }
+    $actionType = ([string](Get-ObjectPropertyValue -Value $a -Name "action_type")).Trim()
+    if ([string]::IsNullOrWhiteSpace($actionType)) { continue }
+    $actionsByType[$actionType] = $a
+  }
+
+  # Scheduled actions must stay stable and deterministic for downstream sender adapters.
+  $scheduledActions = @()
+  foreach ($actionType in @("cta_buy", "cta_subscribe")) {
+    if (-not $actionsByType.Contains($actionType)) {
+      continue
+    }
+    $sourceAction = $actionsByType[$actionType]
+    $scheduledActions += [pscustomobject]@{
+      action_type = $actionType
+      action_stub = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "action_stub")
+      ad_copy = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "ad_copy")
+      reply_template = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "reply_template")
+    }
+  }
+
+  $envelopeId = "sender-{0}-{1}-{2}-{3}-{4}" -f `
+    (New-SafeTelemetryId -Value $taskId), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $selectedVariantId), `
+    (New-SafeTelemetryId -Value $deliveryId)
+
+  $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("sender_envelope_emitted")
+  foreach ($rc in @($ReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+
+  return [pscustomobject]@{
+    envelope_id = $envelopeId
+    delivery_id = $deliveryId
+    dispatch_id = $dispatchId
+    campaign_id = $campaignId
+    channel = $channel
+    language_code = $languageCode
+    selected_variant_id = $selectedVariantId
+    provider_mode = $providerMode
+    dry_run = $dryRun
+    scheduled_actions = @($scheduledActions)
+    reason_codes = @($reasonList | Select-Object -Unique)
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -951,6 +1029,7 @@ function Invoke-RevenueTaskRoute {
       campaign_packet = $null
       dispatch_plan = $null
       delivery_manifest = $null
+      sender_envelope = $null
     }
   }
 
@@ -970,6 +1049,7 @@ function Invoke-RevenueTaskRoute {
       campaign_packet = $null
       dispatch_plan = $null
       delivery_manifest = $null
+      sender_envelope = $null
     }
   }
 
@@ -995,6 +1075,7 @@ function Invoke-RevenueTaskRoute {
         campaign_packet = $null
         dispatch_plan = $null
         delivery_manifest = $null
+        sender_envelope = $null
       }
     }
   }
@@ -1024,6 +1105,7 @@ function Invoke-RevenueTaskRoute {
         campaign_packet = $null
         dispatch_plan = $null
         delivery_manifest = $null
+        sender_envelope = $null
       }
     }
   }
@@ -1038,6 +1120,7 @@ function Invoke-RevenueTaskRoute {
   $campaignPacket = $null
   $dispatchPlan = $null
   $deliveryManifest = $null
+  $senderEnvelope = $null
 
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
@@ -1089,6 +1172,11 @@ function Invoke-RevenueTaskRoute {
       -DispatchPlan $dispatchPlan `
       -Config $Config `
       -ReasonCodes $resultReasonCodes
+
+    $senderEnvelope = Get-DeterministicSenderEnvelope `
+      -Task $Task `
+      -DeliveryManifest $deliveryManifest `
+      -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
     $resultReasonCodes = @($routing.reason_codes | ForEach-Object { [string]$_ })
@@ -1119,5 +1207,6 @@ function Invoke-RevenueTaskRoute {
     campaign_packet = $campaignPacket
     dispatch_plan = $dispatchPlan
     delivery_manifest = $deliveryManifest
+    sender_envelope = $senderEnvelope
   }
 }

@@ -266,7 +266,8 @@ Describe "revenue automation scaffold smoke" {
         "telemetry_event",
         "campaign_packet",
         "dispatch_plan",
-        "delivery_manifest"
+        "delivery_manifest",
+        "sender_envelope"
       )
 
       foreach ($field in $requiredFields) {
@@ -1286,6 +1287,119 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.delivery_manifest) -Message "Malformed lead payload must not emit delivery_manifest."
+    }
+  }
+
+  Context "16) deterministic sender envelope contract" {
+    It "emits deterministic sender_envelope with ordered scheduled_actions, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv013-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 930; conversion_bps = 280; impressions = 700 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv013-001"; segment = "saas"; pain_match = $true; budget = 2800; engagement_score = 85 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Sender envelope run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Sender envelope run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.sender_envelope) -Message "Successful lead_enrich should emit sender_envelope."
+
+      $envelope = $run1.result.sender_envelope
+      $requiredEnvelopeFields = @(
+        "envelope_id",
+        "delivery_id",
+        "dispatch_id",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "scheduled_actions",
+        "reason_codes"
+      )
+      foreach ($field in $requiredEnvelopeFields) {
+        Assert-True -Condition ($envelope.PSObject.Properties.Name -contains $field) -Message "sender_envelope missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$envelope.delivery_id) -Expected ([string]$run1.result.delivery_manifest.delivery_id) -Message "sender_envelope delivery_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.dispatch_id) -Expected ([string]$run1.result.delivery_manifest.dispatch_id) -Message "sender_envelope dispatch_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.campaign_id) -Expected ([string]$run1.result.delivery_manifest.campaign_id) -Message "sender_envelope campaign_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.channel) -Expected ([string]$run1.result.delivery_manifest.channel) -Message "sender_envelope channel mismatch."
+      Assert-Equal -Actual ([string]$envelope.language_code) -Expected ([string]$run1.result.delivery_manifest.language_code) -Message "sender_envelope language_code mismatch."
+      Assert-Equal -Actual ([string]$envelope.selected_variant_id) -Expected ([string]$run1.result.delivery_manifest.selected_variant_id) -Message "sender_envelope variant mismatch."
+      Assert-Equal -Actual ([string]$envelope.provider_mode) -Expected "mock" -Message "sender_envelope provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$envelope.dry_run) -Expected $true -Message "sender_envelope dry_run mismatch."
+
+      $scheduled = @($envelope.scheduled_actions)
+      Assert-Equal -Actual $scheduled.Count -Expected 2 -Message "sender_envelope scheduled_actions should contain exactly two entries."
+      Assert-Equal -Actual ([string]$scheduled[0].action_type) -Expected "cta_buy" -Message "sender_envelope scheduled action ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$scheduled[1].action_type) -Expected "cta_subscribe" -Message "sender_envelope scheduled action ordering mismatch for cta_subscribe."
+      Assert-Equal -Actual ([string]$scheduled[0].action_stub) -Expected ([string]$run1.result.delivery_manifest.actions[0].action_stub) -Message "sender_envelope cta_buy action_stub mismatch."
+      Assert-Equal -Actual ([string]$scheduled[1].action_stub) -Expected ([string]$run1.result.delivery_manifest.actions[1].action_stub) -Message "sender_envelope cta_subscribe action_stub mismatch."
+      Assert-Equal -Actual ([string]$scheduled[0].ad_copy) -Expected ([string]$run1.result.delivery_manifest.actions[0].ad_copy) -Message "sender_envelope cta_buy ad_copy mismatch."
+      Assert-Equal -Actual ([string]$scheduled[0].reply_template) -Expected ([string]$run1.result.delivery_manifest.actions[0].reply_template) -Message "sender_envelope cta_buy reply_template mismatch."
+
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "sender_envelope_emitted" -Message "sender_envelope should include emission reason code."
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "template_lang_native" -Message "sender_envelope should include template lineage."
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "variant_lang_perf_win" -Message "sender_envelope should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($envelope.PSObject.Properties.Name -contains $forbidden)) -Message "sender_envelope must not expose $forbidden."
+      }
+
+      $envelopeJson1 = ($run1.result.sender_envelope | ConvertTo-Json -Depth 40 -Compress)
+      $envelopeJson2 = ($run2.result.sender_envelope | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $envelopeJson1 -Expected $envelopeJson2 -Message "sender_envelope must remain deterministic across repeated runs."
+    }
+
+    It "does not emit sender_envelope for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.sender_envelope) -Message "Malformed lead payload must not emit sender_envelope."
     }
   }
 }
