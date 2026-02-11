@@ -1,8 +1,9 @@
-param(
-  [Parameter(Mandatory = $true)][string]$ScriptPath,
+﻿param(
+  [Parameter(Mandatory = $true)][string]$Url,
   [string]$Name = "api",
   [int]$TimeoutSec = 30,
-  [int]$IntervalSec = 1
+  [int]$IntervalSec = 1,
+  [switch]$RequireReady
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,37 +12,49 @@ Set-StrictMode -Version Latest
 if ($TimeoutSec -lt 1) { throw "TimeoutSec must be >= 1." }
 if ($IntervalSec -lt 1) { throw "IntervalSec must be >= 1." }
 
-if (-not (Test-Path -Path $ScriptPath -PathType Leaf)) {
-  Write-Error "Health target script not found: $ScriptPath"
-  exit 2
-}
-
-$resolvedScriptPath = (Resolve-Path -Path $ScriptPath).Path
-$shellPath = (Get-Process -Id $PID).Path
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $attempt = 0
-
 while ((Get-Date) -lt $deadline) {
   $attempt++
-  $output = @(& $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolvedScriptPath -Health 2>&1)
-  $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+  try {
+    $resp = Invoke-WebRequest -Uri $Url -Method Get -UseBasicParsing -TimeoutSec $IntervalSec
+    if ($resp.StatusCode -eq 200) {
+      $payload = $null
+      try {
+        $payload = $resp.Content | ConvertFrom-Json
+      }
+      catch {
+        $payload = $null
+      }
 
-  if ($exitCode -eq 0) {
-    $raw = ($output -join [Environment]::NewLine)
-    try {
-      $health = $raw | ConvertFrom-Json
-      if ($null -ne $health -and [string]$health.status -eq "ok" -and [bool]$health.ready) {
+      if (-not $RequireReady) {
+        Write-Host "HEALTH_READY name=$Name attempt=$attempt"
+        exit 0
+      }
+
+      if ($null -ne $payload -and $payload.PSObject.Properties.Name -contains "result") {
+        $result = $payload.result
+        $isReady = $false
+        if ($null -ne $result -and $result.PSObject.Properties.Name -contains "ready") {
+          $isReady = [bool]$result.ready
+        }
+        if ($isReady) {
+          Write-Host "HEALTH_READY name=$Name attempt=$attempt"
+          exit 0
+        }
+      }
+      elseif ($null -ne $payload -and $payload.PSObject.Properties.Name -contains "ready" -and [bool]$payload.ready) {
         Write-Host "HEALTH_READY name=$Name attempt=$attempt"
         exit 0
       }
     }
-    catch {
-      # Retry until timeout if payload is not parseable yet.
-    }
+  }
+  catch {
+    # continue retries
   }
 
   Start-Sleep -Seconds $IntervalSec
 }
 
-Write-Error "Health check timeout for '$Name' after $TimeoutSec seconds."
+Write-Error "Health check timeout for '$Name' after $TimeoutSec seconds. Url: $Url"
 exit 1

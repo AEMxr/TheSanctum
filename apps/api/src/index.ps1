@@ -650,10 +650,10 @@ function Handle-LanguageApiHttpRequest {
 
     $body = ConvertFrom-JsonSafe -Raw $rawBody -Label "Language API request body"
 
-    $inputText = [string]$body.input_text
-    $sourceChannel = [string]$body.source_channel
-    $sourceLanguage = [string]$body.source_language
-    $targetLanguage = [string]$body.target_language
+    $inputText = if ($body.PSObject.Properties.Name -contains "input_text") { [string]$body.input_text } else { "" }
+    $sourceChannel = if ($body.PSObject.Properties.Name -contains "source_channel") { [string]$body.source_channel } else { "" }
+    $sourceLanguage = if ($body.PSObject.Properties.Name -contains "source_language") { [string]$body.source_language } else { "" }
+    $targetLanguage = if ($body.PSObject.Properties.Name -contains "target_language") { [string]$body.target_language } else { "" }
     $mode = if ($path -eq "/v1/language/translate") { "convert" } else { "detect" }
     if ($body.PSObject.Properties.Name -contains "mode" -and -not [string]::IsNullOrWhiteSpace([string]$body.mode)) {
       $mode = [string]$body.mode

@@ -1,0 +1,212 @@
+openapi: 3.0.3
+info:
+  title: Sanctum Language API
+  version: 1.0.0
+  description: Deterministic language detection and translation API.
+servers:
+  - url: http://127.0.0.1:8081
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, detail, request_id]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        request_id: { type: string }
+    LanguageResult:
+      type: object
+      required: [input_text, source_channel, mode, source_language, target_language, detected_language, confidence_band, conversion_applied, reason_codes]
+      properties:
+        input_text: { type: string }
+        source_channel: { type: string }
+        mode: { type: string, enum: [detect, convert, detect_and_convert] }
+        source_language: { type: string }
+        target_language: { type: string }
+        detected_language: { type: string }
+        confidence_band: { type: string, enum: [low, medium, high] }
+        converted_text:
+          type: string
+          nullable: true
+        conversion_applied: { type: boolean }
+        reason_codes:
+          type: array
+          items: { type: string }
+    LanguageEnvelope:
+      type: object
+      required: [request_id, schema_version, provider_used, result]
+      properties:
+        request_id: { type: string }
+        schema_version: { type: string }
+        provider_used: { type: string }
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/LanguageResult'
+            - type: object
+paths:
+  /health:
+    get:
+      security: []
+      summary: Service health check
+      responses:
+        '200':
+          description: Health envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageEnvelope'
+  /ready:
+    get:
+      security: []
+      summary: Service readiness check
+      responses:
+        '200':
+          description: Ready envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageEnvelope'
+  /v1/language/detect:
+    post:
+      summary: Detect language deterministically
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input_text, source_channel]
+              properties:
+                input_text: { type: string, maxLength: 10000 }
+                source_channel: { type: string }
+                mode: { type: string, enum: [detect, detect_and_convert, convert] }
+                source_language: { type: string }
+                target_language: { type: string }
+      responses:
+        '200':
+          description: Detection response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageEnvelope'
+        '400':
+          description: Invalid payload
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Idempotency key conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: Rate limited
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /v1/language/translate:
+    post:
+      summary: Translate language deterministically
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input_text, source_channel, target_language]
+              properties:
+                input_text: { type: string, maxLength: 10000 }
+                source_channel: { type: string }
+                source_language: { type: string }
+                target_language: { type: string }
+                mode: { type: string, enum: [convert, detect_and_convert] }
+      responses:
+        '200':
+          description: Translation response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguageEnvelope'
+        '400':
+          description: Invalid payload
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Idempotency key conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: Rate limited
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /v1/admin/usage:
+    get:
+      summary: Usage ledger export (admin only)
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Usage rows
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: Forbidden (admin role required)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'

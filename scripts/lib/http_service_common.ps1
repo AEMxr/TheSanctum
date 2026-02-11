@@ -166,7 +166,7 @@ function Get-ApiHttpConfig {
     $httpConfig = $ConfigObject.http
   }
 
-  $host = "127.0.0.1"
+  $bindHost = "127.0.0.1"
   $port = $DefaultPort
   $maxRequestBytes = 65536
   $requestTimeoutMs = 15000
@@ -181,7 +181,7 @@ function Get-ApiHttpConfig {
 
   if ($null -ne $httpConfig) {
     if ($httpConfig.PSObject.Properties.Name -contains "host" -and -not [string]::IsNullOrWhiteSpace([string]$httpConfig.host)) {
-      $host = ([string]$httpConfig.host).Trim()
+      $bindHost = ([string]$httpConfig.host).Trim()
     }
     if ($httpConfig.PSObject.Properties.Name -contains "port") {
       $tmpPort = 0
@@ -263,7 +263,7 @@ function Get-ApiHttpConfig {
 
   return [pscustomobject]@{
     service_name = $ServiceName
-    host = $host
+    host = $bindHost
     port = $port
     max_request_bytes = $maxRequestBytes
     request_timeout_ms = $requestTimeoutMs

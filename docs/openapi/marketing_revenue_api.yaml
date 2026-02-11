@@ -1,0 +1,193 @@
+openapi: 3.0.3
+info:
+  title: Sanctum Marketing/Revenue API
+  version: 1.0.0
+  description: Deterministic task execution API for marketing and revenue automation.
+servers:
+  - url: http://127.0.0.1:8082
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, detail, request_id]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        request_id: { type: string }
+    TaskEnvelope:
+      type: object
+      required: [task_id, task_type, payload, created_at_utc]
+      properties:
+        task_id: { type: string }
+        task_type: { type: string }
+        payload: { type: object }
+        created_at_utc: { type: string, format: date-time }
+    TaskResultEnvelope:
+      type: object
+      required: [request_id, schema_version, provider_used, result]
+      properties:
+        request_id: { type: string }
+        schema_version: { type: string }
+        provider_used: { type: string }
+        result:
+          type: object
+          properties:
+            task_id: { type: string }
+            status: { type: string, enum: [SUCCESS, FAILED, SKIPPED] }
+            provider_used: { type: string }
+            reason_codes:
+              type: array
+              items: { type: string }
+paths:
+  /health:
+    get:
+      security: []
+      summary: Service health check
+      responses:
+        '200':
+          description: Health envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResultEnvelope'
+  /ready:
+    get:
+      security: []
+      summary: Service readiness check
+      responses:
+        '200':
+          description: Ready envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResultEnvelope'
+  /v1/marketing/task/execute:
+    post:
+      summary: Execute marketing task
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskEnvelope'
+      responses:
+        '200':
+          description: Execution result envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResultEnvelope'
+        '400':
+          description: Invalid payload
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Idempotency key conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: Rate limited
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /v1/revenue/task/execute:
+    post:
+      summary: Execute revenue task (alias)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskEnvelope'
+      responses:
+        '200':
+          description: Execution result envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResultEnvelope'
+        '400':
+          description: Invalid payload
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Idempotency key conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: Rate limited
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /v1/admin/usage:
+    get:
+      summary: Usage ledger export (admin only)
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Usage rows
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: Forbidden (admin role required)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Missing/invalid API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'

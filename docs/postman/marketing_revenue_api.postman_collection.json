@@ -1,0 +1,51 @@
+{
+  "info": {
+    "name": "Sanctum Marketing Revenue API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8082" },
+    { "key": "apiKey", "value": "dev-local-key" },
+    { "key": "idempotencyKey", "value": "rev-idem-001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Execute Marketing Task",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_id\": \"postman-task-001\",\n  \"task_type\": \"lead_enrich\",\n  \"payload\": {\n    \"source_channel\": \"reddit\",\n    \"campaign_id\": \"camp-postman-001\",\n    \"language_code\": \"en\",\n    \"leads\": [{\"lead_id\":\"lead-postman-001\",\"segment\":\"saas\",\"budget\":1500,\"engagement_score\":90}]\n  },\n  \"created_at_utc\": \"2026-01-01T00:00:00Z\"\n}"
+        },
+        "url": "{{baseUrl}}/v1/marketing/task/execute"
+      }
+    },
+    {
+      "name": "Execute Revenue Alias",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"task_id\": \"postman-task-002\",\n  \"task_type\": \"followup_draft\",\n  \"payload\": {\"lead_id\":\"lead-postman-002\"},\n  \"created_at_utc\": \"2026-01-01T00:00:00Z\"\n}"
+        },
+        "url": "{{baseUrl}}/v1/revenue/task/execute"
+      }
+    }
+  ]
+}
