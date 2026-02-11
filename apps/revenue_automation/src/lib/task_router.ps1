@@ -536,6 +536,100 @@ function Get-DeterministicPolicyDecision {
   }
 }
 
+function Get-RevenueTelemetryEventStub {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [object]$Policy = $null,
+    [object]$Routing = $null,
+    [object]$Variant = $null
+  )
+
+  $payload = $Task.payload
+  $languageCode = "und"
+  $regionCode = "ZZ"
+  $geoCoarse = "unknown"
+  $channel = "unknown"
+  $campaignId = ""
+
+  if (Test-ObjectLike -Value $payload) {
+    $languageCandidates = @(
+      [string](Get-ObjectPropertyValue -Value $payload -Name "language_code"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "detected_language"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "language"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "locale")
+    )
+    foreach ($candidate in $languageCandidates) {
+      if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+        $languageCode = ($candidate.Trim().ToLowerInvariant() -split "[-_]")[0]
+        break
+      }
+    }
+
+    $regionCandidates = @(
+      [string](Get-ObjectPropertyValue -Value $payload -Name "region_code"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "region")
+    )
+    foreach ($candidate in $regionCandidates) {
+      if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+        $regionCode = $candidate.Trim().ToUpperInvariant()
+        break
+      }
+    }
+
+    $geoCandidate = [string](Get-ObjectPropertyValue -Value $payload -Name "geo_coarse")
+    if (-not [string]::IsNullOrWhiteSpace($geoCandidate)) {
+      $geoCoarse = $geoCandidate.Trim()
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($regionCode) -and $regionCode -ne "ZZ") {
+      $geoCoarse = $regionCode
+    }
+
+    $channelCandidates = @(
+      [string](Get-ObjectPropertyValue -Value $payload -Name "source_channel"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "channel")
+    )
+    foreach ($candidate in $channelCandidates) {
+      if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+        $channel = $candidate.Trim().ToLowerInvariant()
+        break
+      }
+    }
+
+    $campaignId = [string](Get-ObjectPropertyValue -Value $payload -Name "campaign_id")
+  }
+
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  if ([string]::IsNullOrWhiteSpace($regionCode)) { $regionCode = "ZZ" }
+  if ([string]::IsNullOrWhiteSpace($geoCoarse)) { $geoCoarse = "unknown" }
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "unknown" }
+
+  $selectedVariantId = ""
+  if ($null -ne $Variant -and (Get-ObjectPropertyNames -Value $Variant) -contains "selected_variant_id") {
+    $selectedVariantId = [string](Get-ObjectPropertyValue -Value $Variant -Name "selected_variant_id")
+  }
+
+  $selectedRoute = ""
+  if ($null -ne $Routing -and (Get-ObjectPropertyNames -Value $Routing) -contains "selected_route") {
+    $selectedRoute = [string](Get-ObjectPropertyValue -Value $Routing -Name "selected_route")
+  }
+
+  $policyAllowed = $null
+  if ($null -ne $Policy -and (Get-ObjectPropertyNames -Value $Policy) -contains "allowed") {
+    $policyAllowed = [bool](Get-ObjectPropertyValue -Value $Policy -Name "allowed")
+  }
+
+  return [pscustomobject]@{
+    language_code = $languageCode
+    region_code = $regionCode
+    geo_coarse = $geoCoarse
+    source_channel = $channel
+    campaign_id = $campaignId
+    selected_variant_id = $selectedVariantId
+    selected_route = $selectedRoute
+    policy_allowed = $policyAllowed
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -561,6 +655,7 @@ function Invoke-RevenueTaskRoute {
       offer = $null
       proposal = $null
       reason_codes = @()
+      telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
     }
   }
 
@@ -575,6 +670,7 @@ function Invoke-RevenueTaskRoute {
       offer = $null
       proposal = $null
       reason_codes = @($policy.reason_codes | ForEach-Object { [string]$_ })
+      telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
     }
   }
 
@@ -595,6 +691,7 @@ function Invoke-RevenueTaskRoute {
         offer = $null
         proposal = $null
         reason_codes = @()
+        telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy -Routing $routing
       }
     }
   }
@@ -619,6 +716,7 @@ function Invoke-RevenueTaskRoute {
         offer = $null
         proposal = $null
         reason_codes = @()
+        telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
       }
     }
   }
@@ -667,5 +765,6 @@ function Invoke-RevenueTaskRoute {
     else {
       @()
     }
+    telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy -Routing $routing -Variant $variant
   }
 }

@@ -178,6 +178,7 @@ $result = [pscustomobject]@{
   route = if ($routeResult.PSObject.Properties.Name -contains "route") { $routeResult.route } else { $null }
   offer = if ($routeResult.PSObject.Properties.Name -contains "offer") { $routeResult.offer } else { $null }
   proposal = if ($routeResult.PSObject.Properties.Name -contains "proposal") { $routeResult.proposal } else { $null }
+  telemetry_event_stub = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event_stub") { $routeResult.telemetry_event_stub } else { $null }
 }
 
 if ($config.emit_telemetry) {

@@ -261,7 +261,8 @@ Describe "revenue automation scaffold smoke" {
         "artifacts",
         "policy",
         "offer",
-        "proposal"
+        "proposal",
+        "telemetry_event_stub"
       )
 
       foreach ($field in $requiredFields) {
@@ -940,6 +941,67 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Missing trend summary should preserve successful path."
       Assert-Equal -Actual ([string]$run.result.route.variant.selected_variant_id) -Expected "variant_de_core" -Message "Missing trend summary should use deterministic language fallback variant."
       Assert-Contains -Collection @($run.result.route.variant.selection_reason_codes) -Value "variant_lang_tiebreak" -Message "Fallback variant should emit stable reason code."
+    }
+  }
+
+  Context "12) marketing API response contract" {
+    It "emits explicit proposal, variant, telemetry fields, and reason lineage on successful lead_enrich" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          geo_coarse = "mx-north"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 920; conversion_bps = 300; impressions = 400 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-contract-001"; segment = "saas"; pain_match = $true; budget = 2500; engagement_score = 80 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Contract success run should exit 0."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Contract success run should return SUCCESS."
+
+      Assert-True -Condition ($null -ne $run.result.proposal) -Message "Successful lead_enrich should emit proposal."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.ad_copy)) -Message "Proposal should include ad_copy."
+      Assert-True -Condition (@($run.result.proposal.short_reply_templates).Count -gt 0) -Message "Proposal should include short_reply_templates."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.cta_buy_text)) -Message "Proposal should include cta_buy_text."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.cta_subscribe_text)) -Message "Proposal should include cta_subscribe_text."
+
+      Assert-True -Condition ($null -ne $run.result.route) -Message "Successful lead_enrich should emit route."
+      Assert-True -Condition ($null -ne $run.result.route.variant) -Message "Successful lead_enrich should emit route.variant."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.route.variant.selected_variant_id)) -Message "Variant should include selected_variant_id."
+      Assert-True -Condition (@($run.result.route.variant.selection_reason_codes).Count -gt 0) -Message "Variant should include selection_reason_codes."
+
+      Assert-Contains -Collection @($run.result.reason_codes) -Value "template_lang_native" -Message "Result reason_codes should include template lineage."
+      Assert-Contains -Collection @($run.result.reason_codes) -Value "variant_lang_perf_win" -Message "Result reason_codes should include variant lineage."
+
+      Assert-True -Condition ($null -ne $run.result.telemetry_event_stub) -Message "Result should include telemetry_event_stub."
+      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.language_code) -Expected "es" -Message "Telemetry stub language_code mismatch."
+      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.region_code) -Expected "MX" -Message "Telemetry stub region_code mismatch."
+      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.geo_coarse) -Expected "mx-north" -Message "Telemetry stub geo_coarse mismatch."
+      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.source_channel) -Expected "reddit" -Message "Telemetry stub source_channel mismatch."
+      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.selected_variant_id) -Expected ([string]$run.result.route.variant.selected_variant_id) -Message "Telemetry stub selected_variant_id mismatch."
+
+      Assert-True -Condition (-not ($run.result.telemetry_event_stub.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry stub must not expose latitude."
+      Assert-True -Condition (-not ($run.result.telemetry_event_stub.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry stub must not expose longitude."
     }
   }
 }
