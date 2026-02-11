@@ -31,8 +31,8 @@ function Read-LedgerRows {
   param(
     [Parameter(Mandatory = $true)][string]$LedgerPath,
     [Parameter(Mandatory = $true)][string]$ServiceName,
-    [datetime]$FromUtc,
-    [datetime]$ToUtc
+    $FromUtc = $null,
+    $ToUtc = $null
   )
 
   if (-not (Test-Path -Path $LedgerPath -PathType Leaf)) {
@@ -55,8 +55,8 @@ function Read-LedgerRows {
       continue
     }
     $utcTs = $ts.ToUniversalTime()
-    if ($null -ne $FromUtc -and $utcTs -lt $FromUtc) { continue }
-    if ($null -ne $ToUtc -and $utcTs -gt $ToUtc) { continue }
+    if ($FromUtc -is [datetime] -and $utcTs -lt $FromUtc) { continue }
+    if ($ToUtc -is [datetime] -and $utcTs -gt $ToUtc) { continue }
 
     if (-not ($entry.PSObject.Properties.Name -contains "service") -or [string]::IsNullOrWhiteSpace([string]$entry.service)) {
       $entry | Add-Member -NotePropertyName service -NotePropertyValue $ServiceName -Force
