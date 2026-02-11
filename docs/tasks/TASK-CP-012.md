@@ -39,4 +39,5 @@ Extend trend telemetry to segment performance by language and region so optimiza
 ## Execution notes
 - Keep storage anonymized and consent-first.
 - Reason codes example: `trend_lang_segmented`.
+- Segment output includes deterministic `region_breakdown` rows within each language/tier/channel segment.
 - Next first command: `Get-Content docs/tasks/TASK-CP-012.md -Raw`

@@ -108,6 +108,49 @@ function Get-SafeBps {
   return [int][Math]::Floor((10000.0 * [double]$Numerator) / [double]$Denominator)
 }
 
+function Get-RegionBreakdownForEvents {
+  param([Parameter(Mandatory = $true)][object[]]$EventsInSegment)
+
+  $regionGroups = @(
+    @($EventsInSegment) |
+      Group-Object -Property { [string]$_.region_code }
+  )
+
+  $rows = New-Object System.Collections.Generic.List[object]
+  foreach ($g in $regionGroups) {
+    $regionCode = [string]$g.Name
+    if ([string]::IsNullOrWhiteSpace($regionCode)) { $regionCode = "ZZ" }
+    $regionEvents = @($g.Group)
+
+    $impressions = @($regionEvents | Where-Object { $_.event_type -eq "impression" }).Count
+    $clickBuy = @($regionEvents | Where-Object { $_.event_type -eq "click_cta_buy" }).Count
+    $clickSubscribe = @($regionEvents | Where-Object { $_.event_type -eq "click_cta_subscribe" }).Count
+    $purchases = @($regionEvents | Where-Object { $_.event_type -eq "purchase_complete" }).Count
+    $clicksTotal = [int]($clickBuy + $clickSubscribe)
+
+    [void]$rows.Add([pscustomobject]@{
+      region_code = $regionCode
+      counts = [pscustomobject]@{
+        events = @($regionEvents).Count
+        impressions = $impressions
+        click_cta_buy = $clickBuy
+        click_cta_subscribe = $clickSubscribe
+        purchase_complete = $purchases
+      }
+      metrics = [pscustomobject]@{
+        ctr_bps = (Get-SafeBps -Numerator $clicksTotal -Denominator $impressions)
+        conversion_bps = (Get-SafeBps -Numerator $purchases -Denominator $impressions)
+      }
+      reason_codes = @("trend_lang_segmented")
+    })
+  }
+
+  return @(
+    $rows |
+      Sort-Object -Property @{ Expression = "region_code"; Descending = $false }
+  )
+}
+
 function Get-LanguageSegmentedTrendMetrics {
   param([Parameter(Mandatory = $true)][object[]]$Events)
 
@@ -153,6 +196,7 @@ function Get-LanguageSegmentedTrendMetrics {
         ctr_bps = $ctrBps
         conversion_bps = $conversionBps
       }
+      region_breakdown = @(Get-RegionBreakdownForEvents -EventsInSegment $eventsInGroup)
       reason_codes = @("trend_lang_segmented")
     })
   }

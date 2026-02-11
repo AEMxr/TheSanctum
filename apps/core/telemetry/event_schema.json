@@ -52,5 +52,11 @@
   "privacy_notes": [
     "No precise geo coordinates.",
     "No personal identity expansion in trend telemetry."
+  ],
+  "segmentation_dimensions": [
+    "language_code",
+    "offer_tier",
+    "channel",
+    "region_code"
   ]
 }

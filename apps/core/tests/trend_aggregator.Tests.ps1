@@ -79,10 +79,14 @@ Describe "cross-language trend aggregator" {
       Assert-Equal -Actual ([int]$en[0].counts.impressions) -Expected 1 -Message "English impressions mismatch."
       Assert-Equal -Actual ([int]$en[0].counts.purchase_complete) -Expected 1 -Message "English purchase count mismatch."
       Assert-Equal -Actual ([int]$en[0].metrics.conversion_bps) -Expected 10000 -Message "English conversion_bps mismatch."
+      Assert-Equal -Actual (@($en[0].region_breakdown).Count) -Expected 1 -Message "Expected one english region segment."
+      Assert-Equal -Actual ([string]$en[0].region_breakdown[0].region_code) -Expected "US" -Message "English region code mismatch."
 
       Assert-Equal -Actual ([int]$es[0].counts.impressions) -Expected 1 -Message "Spanish impressions mismatch."
       Assert-Equal -Actual ([int]$es[0].counts.click_cta_subscribe) -Expected 1 -Message "Spanish subscribe click count mismatch."
       Assert-Equal -Actual ([int]$es[0].metrics.ctr_bps) -Expected 10000 -Message "Spanish ctr_bps mismatch."
+      Assert-Equal -Actual (@($es[0].region_breakdown).Count) -Expected 1 -Message "Expected one spanish region segment."
+      Assert-Equal -Actual ([string]$es[0].region_breakdown[0].region_code) -Expected "MX" -Message "Spanish region code mismatch."
     }
 
     It "remains deterministic for repeated same dataset" {
