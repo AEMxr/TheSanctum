@@ -277,7 +277,8 @@ Describe "revenue automation scaffold smoke" {
         "ledger_attestation",
         "proof_verification",
         "anchor_record",
-        "index_receipt"
+        "index_receipt",
+        "archive_manifest"
       )
 
       foreach ($field in $requiredFields) {
@@ -2727,6 +2728,139 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.index_receipt) -Message "Malformed lead payload must not emit index_receipt."
+    }
+  }
+
+  Context "27) deterministic archive manifest contract" {
+    It "emits deterministic archive_manifest with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv025-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 1020; conversion_bps = 370; impressions = 800 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv025-001"; segment = "saas"; pain_match = $true; budget = 4300; engagement_score = 99 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Archive manifest run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Archive manifest run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.archive_manifest) -Message "Successful lead_enrich should emit archive_manifest."
+
+      $archive = $run1.result.archive_manifest
+      $requiredArchiveFields = @(
+        "archive_id",
+        "index_id",
+        "anchor_id",
+        "verification_id",
+        "attestation_id",
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredArchiveFields) {
+        Assert-True -Condition ($archive.PSObject.Properties.Name -contains $field) -Message "archive_manifest missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$archive.index_id) -Expected ([string]$run1.result.index_receipt.index_id) -Message "archive_manifest index_id mismatch."
+      Assert-Equal -Actual ([string]$archive.anchor_id) -Expected ([string]$run1.result.index_receipt.anchor_id) -Message "archive_manifest anchor_id mismatch."
+      Assert-Equal -Actual ([string]$archive.verification_id) -Expected ([string]$run1.result.index_receipt.verification_id) -Message "archive_manifest verification_id mismatch."
+      Assert-Equal -Actual ([string]$archive.attestation_id) -Expected ([string]$run1.result.index_receipt.attestation_id) -Message "archive_manifest attestation_id mismatch."
+      Assert-Equal -Actual ([string]$archive.immutability_id) -Expected ([string]$run1.result.index_receipt.immutability_id) -Message "archive_manifest immutability_id mismatch."
+      Assert-Equal -Actual ([string]$archive.manifest_id) -Expected ([string]$run1.result.index_receipt.manifest_id) -Message "archive_manifest manifest_id mismatch."
+      Assert-Equal -Actual ([string]$archive.envelope_id) -Expected ([string]$run1.result.index_receipt.envelope_id) -Message "archive_manifest envelope_id mismatch."
+      Assert-Equal -Actual ([string]$archive.record_id) -Expected ([string]$run1.result.index_receipt.record_id) -Message "archive_manifest record_id mismatch."
+      Assert-Equal -Actual ([string]$archive.event_id) -Expected ([string]$run1.result.index_receipt.event_id) -Message "archive_manifest event_id mismatch."
+      Assert-Equal -Actual ([string]$archive.receipt_id) -Expected ([string]$run1.result.index_receipt.receipt_id) -Message "archive_manifest receipt_id mismatch."
+      Assert-Equal -Actual ([string]$archive.request_id) -Expected ([string]$run1.result.index_receipt.request_id) -Message "archive_manifest request_id mismatch."
+      Assert-Equal -Actual ([string]$archive.idempotency_key) -Expected ([string]$run1.result.index_receipt.idempotency_key) -Message "archive_manifest idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$archive.campaign_id) -Expected ([string]$run1.result.index_receipt.campaign_id) -Message "archive_manifest campaign_id mismatch."
+      Assert-Equal -Actual ([string]$archive.channel) -Expected ([string]$run1.result.index_receipt.channel) -Message "archive_manifest channel mismatch."
+      Assert-Equal -Actual ([string]$archive.language_code) -Expected ([string]$run1.result.index_receipt.language_code) -Message "archive_manifest language_code mismatch."
+      Assert-Equal -Actual ([string]$archive.selected_variant_id) -Expected ([string]$run1.result.index_receipt.selected_variant_id) -Message "archive_manifest selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$archive.provider_mode) -Expected "mock" -Message "archive_manifest provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$archive.dry_run) -Expected $true -Message "archive_manifest dry_run mismatch."
+      Assert-Equal -Actual ([string]$archive.status) -Expected "simulated" -Message "archive_manifest status mismatch."
+
+      $acceptedActionTypes = @($archive.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "archive_manifest accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "archive_manifest accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "archive_manifest accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($archive.reason_codes) -Value "archive_manifest_emitted" -Message "archive_manifest should include emission reason code."
+      Assert-Contains -Collection @($archive.reason_codes) -Value "dispatch_receipt_dry_run" -Message "archive_manifest should include dry-run receipt lineage."
+      Assert-Contains -Collection @($archive.reason_codes) -Value "template_lang_native" -Message "archive_manifest should include template lineage."
+      Assert-Contains -Collection @($archive.reason_codes) -Value "variant_lang_perf_win" -Message "archive_manifest should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($archive.PSObject.Properties.Name -contains $forbidden)) -Message "archive_manifest must not expose $forbidden."
+      }
+
+      $archiveJson1 = ($run1.result.archive_manifest | ConvertTo-Json -Depth 40 -Compress)
+      $archiveJson2 = ($run2.result.archive_manifest | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $archiveJson1 -Expected $archiveJson2 -Message "archive_manifest must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.archive_manifest.idempotency_key) -Expected ([string]$run2.result.archive_manifest.idempotency_key) -Message "archive_manifest idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit archive_manifest for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.archive_manifest) -Message "Malformed lead payload must not emit archive_manifest."
     }
   }
 }
