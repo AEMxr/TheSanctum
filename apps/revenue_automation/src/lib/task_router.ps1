@@ -836,6 +836,93 @@ function Get-DeterministicAuditRecord {
   }
 }
 
+function Get-DeterministicEvidenceEnvelope {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][object]$AuditRecord,
+    [string[]]$ReasonCodes = @()
+  )
+
+  $taskId = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
+  if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = "task-unknown" }
+
+  $recordId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "record_id")
+  if ([string]::IsNullOrWhiteSpace($recordId)) { $recordId = "audit-unknown" }
+  $eventId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "event_id")
+  if ([string]::IsNullOrWhiteSpace($eventId)) { $eventId = "mte-unknown" }
+  $receiptId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "receipt_id")
+  if ([string]::IsNullOrWhiteSpace($receiptId)) { $receiptId = "receipt-unknown" }
+  $requestId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "request_id")
+  if ([string]::IsNullOrWhiteSpace($requestId)) { $requestId = "adapter-unknown" }
+  $idempotencyKey = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "idempotency_key")
+  if ([string]::IsNullOrWhiteSpace($idempotencyKey)) { $idempotencyKey = "idem-unknown" }
+  $campaignId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+  $channel = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "channel")
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "web" }
+  $languageCode = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "language_code")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  $selectedVariantId = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "selected_variant_id")
+  $providerMode = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "provider_mode")
+  if ([string]::IsNullOrWhiteSpace($providerMode)) { $providerMode = "mock" }
+  $dryRun = [bool](Get-ObjectPropertyValue -Value $AuditRecord -Name "dry_run")
+  $status = [string](Get-ObjectPropertyValue -Value $AuditRecord -Name "status")
+  if ([string]::IsNullOrWhiteSpace($status)) { $status = "unknown" }
+
+  $actionLookup = @{}
+  foreach ($actionType in @((Get-ObjectPropertyValue -Value $AuditRecord -Name "accepted_action_types"))) {
+    $typeValue = ([string]$actionType).Trim()
+    if ([string]::IsNullOrWhiteSpace($typeValue)) { continue }
+    $actionLookup[$typeValue] = $true
+  }
+
+  # Accepted action type ordering is contractual for downstream retention/signing/export workflows.
+  $acceptedActionTypes = @()
+  foreach ($actionType in @("cta_buy", "cta_subscribe")) {
+    if ($actionLookup.Contains($actionType)) {
+      $acceptedActionTypes += $actionType
+    }
+  }
+
+  $envelopeId = "evidence-{0}-{1}-{2}-{3}-{4}" -f `
+    (New-SafeTelemetryId -Value $taskId), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $selectedVariantId), `
+    (New-SafeTelemetryId -Value $recordId)
+
+  $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("evidence_envelope_emitted")
+  foreach ($rc in @((Get-ObjectPropertyValue -Value $AuditRecord -Name "reason_codes"))) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+  foreach ($rc in @($ReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+
+  return [pscustomobject]@{
+    envelope_id = $envelopeId
+    record_id = $recordId
+    event_id = $eventId
+    receipt_id = $receiptId
+    request_id = $requestId
+    idempotency_key = $idempotencyKey
+    campaign_id = $campaignId
+    channel = $channel
+    language_code = $languageCode
+    selected_variant_id = $selectedVariantId
+    provider_mode = $providerMode
+    dry_run = $dryRun
+    status = $status
+    accepted_action_types = @($acceptedActionTypes)
+    reason_codes = @($reasonList | Select-Object -Unique)
+  }
+}
+
 function Get-DeterministicCampaignPacket {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -1352,6 +1439,7 @@ function Invoke-RevenueTaskRoute {
       adapter_request = $null
       dispatch_receipt = $null
       audit_record = $null
+      evidence_envelope = $null
     }
   }
 
@@ -1375,6 +1463,7 @@ function Invoke-RevenueTaskRoute {
       adapter_request = $null
       dispatch_receipt = $null
       audit_record = $null
+      evidence_envelope = $null
     }
   }
 
@@ -1404,6 +1493,7 @@ function Invoke-RevenueTaskRoute {
         adapter_request = $null
         dispatch_receipt = $null
         audit_record = $null
+        evidence_envelope = $null
       }
     }
   }
@@ -1437,6 +1527,7 @@ function Invoke-RevenueTaskRoute {
         adapter_request = $null
         dispatch_receipt = $null
         audit_record = $null
+        evidence_envelope = $null
       }
     }
   }
@@ -1455,6 +1546,7 @@ function Invoke-RevenueTaskRoute {
   $adapterRequest = $null
   $dispatchReceipt = $null
   $auditRecord = $null
+  $evidenceEnvelope = $null
 
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
@@ -1522,6 +1614,11 @@ function Invoke-RevenueTaskRoute {
       -Task $Task `
       -TelemetryEvent $telemetryEvent `
       -ReasonCodes $resultReasonCodes
+
+    $evidenceEnvelope = Get-DeterministicEvidenceEnvelope `
+      -Task $Task `
+      -AuditRecord $auditRecord `
+      -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
     $resultReasonCodes = @($routing.reason_codes | ForEach-Object { [string]$_ })
@@ -1556,5 +1653,6 @@ function Invoke-RevenueTaskRoute {
     adapter_request = $adapterRequest
     dispatch_receipt = $dispatchReceipt
     audit_record = $auditRecord
+    evidence_envelope = $evidenceEnvelope
   }
 }

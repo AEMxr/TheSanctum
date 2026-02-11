@@ -188,6 +188,7 @@ $result = [pscustomobject]@{
   adapter_request = if ($routeResult.PSObject.Properties.Name -contains "adapter_request") { $routeResult.adapter_request } else { $null }
   dispatch_receipt = if ($routeResult.PSObject.Properties.Name -contains "dispatch_receipt") { $routeResult.dispatch_receipt } else { $null }
   audit_record = if ($routeResult.PSObject.Properties.Name -contains "audit_record") { $routeResult.audit_record } else { $null }
+  evidence_envelope = if ($routeResult.PSObject.Properties.Name -contains "evidence_envelope") { $routeResult.evidence_envelope } else { $null }
 }
 
 if ($config.emit_telemetry) {

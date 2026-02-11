@@ -270,7 +270,8 @@ Describe "revenue automation scaffold smoke" {
         "sender_envelope",
         "adapter_request",
         "dispatch_receipt",
-        "audit_record"
+        "audit_record",
+        "evidence_envelope"
       )
 
       foreach ($field in $requiredFields) {
@@ -1845,6 +1846,125 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.audit_record) -Message "Malformed lead payload must not emit audit_record."
+    }
+  }
+
+  Context "20) deterministic evidence envelope contract" {
+    It "emits deterministic evidence_envelope with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv018-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 970; conversion_bps = 320; impressions = 740 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv018-001"; segment = "saas"; pain_match = $true; budget = 3400; engagement_score = 92 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Evidence envelope run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Evidence envelope run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.evidence_envelope) -Message "Successful lead_enrich should emit evidence_envelope."
+
+      $envelope = $run1.result.evidence_envelope
+      $requiredEnvelopeFields = @(
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredEnvelopeFields) {
+        Assert-True -Condition ($envelope.PSObject.Properties.Name -contains $field) -Message "evidence_envelope missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$envelope.record_id) -Expected ([string]$run1.result.audit_record.record_id) -Message "evidence_envelope record_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.event_id) -Expected ([string]$run1.result.audit_record.event_id) -Message "evidence_envelope event_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.receipt_id) -Expected ([string]$run1.result.audit_record.receipt_id) -Message "evidence_envelope receipt_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.request_id) -Expected ([string]$run1.result.audit_record.request_id) -Message "evidence_envelope request_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.idempotency_key) -Expected ([string]$run1.result.audit_record.idempotency_key) -Message "evidence_envelope idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$envelope.campaign_id) -Expected ([string]$run1.result.audit_record.campaign_id) -Message "evidence_envelope campaign_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.channel) -Expected ([string]$run1.result.audit_record.channel) -Message "evidence_envelope channel mismatch."
+      Assert-Equal -Actual ([string]$envelope.language_code) -Expected ([string]$run1.result.audit_record.language_code) -Message "evidence_envelope language_code mismatch."
+      Assert-Equal -Actual ([string]$envelope.selected_variant_id) -Expected ([string]$run1.result.audit_record.selected_variant_id) -Message "evidence_envelope selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$envelope.provider_mode) -Expected "mock" -Message "evidence_envelope provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$envelope.dry_run) -Expected $true -Message "evidence_envelope dry_run mismatch."
+      Assert-Equal -Actual ([string]$envelope.status) -Expected "simulated" -Message "evidence_envelope status mismatch."
+
+      $acceptedActionTypes = @($envelope.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "evidence_envelope accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "evidence_envelope accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "evidence_envelope accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "evidence_envelope_emitted" -Message "evidence_envelope should include emission reason code."
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "dispatch_receipt_dry_run" -Message "evidence_envelope should include dry-run receipt lineage."
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "template_lang_native" -Message "evidence_envelope should include template lineage."
+      Assert-Contains -Collection @($envelope.reason_codes) -Value "variant_lang_perf_win" -Message "evidence_envelope should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($envelope.PSObject.Properties.Name -contains $forbidden)) -Message "evidence_envelope must not expose $forbidden."
+      }
+
+      $envelopeJson1 = ($run1.result.evidence_envelope | ConvertTo-Json -Depth 40 -Compress)
+      $envelopeJson2 = ($run2.result.evidence_envelope | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $envelopeJson1 -Expected $envelopeJson2 -Message "evidence_envelope must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.evidence_envelope.idempotency_key) -Expected ([string]$run2.result.evidence_envelope.idempotency_key) -Message "evidence_envelope idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit evidence_envelope for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.evidence_envelope) -Message "Malformed lead payload must not emit evidence_envelope."
     }
   }
 }
