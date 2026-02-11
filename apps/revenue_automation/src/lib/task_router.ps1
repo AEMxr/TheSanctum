@@ -999,6 +999,97 @@ function Get-DeterministicSenderEnvelope {
   }
 }
 
+function Get-DeterministicAdapterRequest {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][object]$SenderEnvelope,
+    [string[]]$ReasonCodes = @()
+  )
+
+  $taskId = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
+  if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = "task-unknown" }
+
+  $envelopeId = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "envelope_id")
+  if ([string]::IsNullOrWhiteSpace($envelopeId)) { $envelopeId = "sender-unknown" }
+  $deliveryId = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "delivery_id")
+  if ([string]::IsNullOrWhiteSpace($deliveryId)) { $deliveryId = "delivery-unknown" }
+  $dispatchId = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "dispatch_id")
+  if ([string]::IsNullOrWhiteSpace($dispatchId)) { $dispatchId = "dispatch-unknown" }
+  $campaignId = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+  $channel = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "channel")
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "web" }
+  $languageCode = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "language_code")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  $selectedVariantId = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "selected_variant_id")
+  $providerMode = [string](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "provider_mode")
+  if ([string]::IsNullOrWhiteSpace($providerMode)) { $providerMode = "mock" }
+  $dryRun = [bool](Get-ObjectPropertyValue -Value $SenderEnvelope -Name "dry_run")
+
+  $actionsByType = @{}
+  foreach ($a in @((Get-ObjectPropertyValue -Value $SenderEnvelope -Name "scheduled_actions"))) {
+    if ($null -eq $a) { continue }
+    $actionType = ([string](Get-ObjectPropertyValue -Value $a -Name "action_type")).Trim()
+    if ([string]::IsNullOrWhiteSpace($actionType)) { continue }
+    $actionsByType[$actionType] = $a
+  }
+
+  $scheduledActions = @()
+  foreach ($actionType in @("cta_buy", "cta_subscribe")) {
+    if (-not $actionsByType.Contains($actionType)) {
+      continue
+    }
+    $sourceAction = $actionsByType[$actionType]
+    $scheduledActions += [pscustomobject]@{
+      action_type = $actionType
+      action_stub = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "action_stub")
+      ad_copy = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "ad_copy")
+      reply_template = [string](Get-ObjectPropertyValue -Value $sourceAction -Name "reply_template")
+    }
+  }
+
+  $requestId = "adapter-{0}-{1}-{2}-{3}-{4}" -f `
+    (New-SafeTelemetryId -Value $taskId), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $selectedVariantId), `
+    (New-SafeTelemetryId -Value $envelopeId)
+
+  $actionTypeBasis = @($scheduledActions | ForEach-Object { [string]$_.action_type }) -join "-"
+
+  $idempotencyKey = "idem-{0}-{1}-{2}-{3}-{4}-{5}" -f `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $languageCode), `
+    (New-SafeTelemetryId -Value $selectedVariantId), `
+    (New-SafeTelemetryId -Value $dispatchId), `
+    (New-SafeTelemetryId -Value $actionTypeBasis)
+
+  $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("adapter_request_emitted")
+  foreach ($rc in @($ReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+
+  return [pscustomobject]@{
+    request_id = $requestId
+    idempotency_key = $idempotencyKey
+    envelope_id = $envelopeId
+    delivery_id = $deliveryId
+    dispatch_id = $dispatchId
+    campaign_id = $campaignId
+    channel = $channel
+    language_code = $languageCode
+    selected_variant_id = $selectedVariantId
+    provider_mode = $providerMode
+    dry_run = $dryRun
+    scheduled_actions = @($scheduledActions)
+    reason_codes = @($reasonList | Select-Object -Unique)
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -1030,6 +1121,7 @@ function Invoke-RevenueTaskRoute {
       dispatch_plan = $null
       delivery_manifest = $null
       sender_envelope = $null
+      adapter_request = $null
     }
   }
 
@@ -1050,6 +1142,7 @@ function Invoke-RevenueTaskRoute {
       dispatch_plan = $null
       delivery_manifest = $null
       sender_envelope = $null
+      adapter_request = $null
     }
   }
 
@@ -1076,6 +1169,7 @@ function Invoke-RevenueTaskRoute {
         dispatch_plan = $null
         delivery_manifest = $null
         sender_envelope = $null
+        adapter_request = $null
       }
     }
   }
@@ -1106,6 +1200,7 @@ function Invoke-RevenueTaskRoute {
         dispatch_plan = $null
         delivery_manifest = $null
         sender_envelope = $null
+        adapter_request = $null
       }
     }
   }
@@ -1121,6 +1216,7 @@ function Invoke-RevenueTaskRoute {
   $dispatchPlan = $null
   $deliveryManifest = $null
   $senderEnvelope = $null
+  $adapterRequest = $null
 
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
@@ -1177,6 +1273,11 @@ function Invoke-RevenueTaskRoute {
       -Task $Task `
       -DeliveryManifest $deliveryManifest `
       -ReasonCodes $resultReasonCodes
+
+    $adapterRequest = Get-DeterministicAdapterRequest `
+      -Task $Task `
+      -SenderEnvelope $senderEnvelope `
+      -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
     $resultReasonCodes = @($routing.reason_codes | ForEach-Object { [string]$_ })
@@ -1208,5 +1309,6 @@ function Invoke-RevenueTaskRoute {
     dispatch_plan = $dispatchPlan
     delivery_manifest = $deliveryManifest
     sender_envelope = $senderEnvelope
+    adapter_request = $adapterRequest
   }
 }

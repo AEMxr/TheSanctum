@@ -267,7 +267,8 @@ Describe "revenue automation scaffold smoke" {
         "campaign_packet",
         "dispatch_plan",
         "delivery_manifest",
-        "sender_envelope"
+        "sender_envelope",
+        "adapter_request"
       )
 
       foreach ($field in $requiredFields) {
@@ -1400,6 +1401,146 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.sender_envelope) -Message "Malformed lead payload must not emit sender_envelope."
+    }
+  }
+
+  Context "17) deterministic adapter request contract" {
+    It "emits deterministic adapter_request with ordered scheduled_actions, lineage, privacy, and idempotency" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv014-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 940; conversion_bps = 290; impressions = 710 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv014-001"; segment = "saas"; pain_match = $true; budget = 2900; engagement_score = 86 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Adapter request run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Adapter request run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.adapter_request) -Message "Successful lead_enrich should emit adapter_request."
+
+      $request = $run1.result.adapter_request
+      $requiredRequestFields = @(
+        "request_id",
+        "idempotency_key",
+        "envelope_id",
+        "delivery_id",
+        "dispatch_id",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "scheduled_actions",
+        "reason_codes"
+      )
+      foreach ($field in $requiredRequestFields) {
+        Assert-True -Condition ($request.PSObject.Properties.Name -contains $field) -Message "adapter_request missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$request.envelope_id) -Expected ([string]$run1.result.sender_envelope.envelope_id) -Message "adapter_request envelope_id mismatch."
+      Assert-Equal -Actual ([string]$request.delivery_id) -Expected ([string]$run1.result.sender_envelope.delivery_id) -Message "adapter_request delivery_id mismatch."
+      Assert-Equal -Actual ([string]$request.dispatch_id) -Expected ([string]$run1.result.sender_envelope.dispatch_id) -Message "adapter_request dispatch_id mismatch."
+      Assert-Equal -Actual ([string]$request.campaign_id) -Expected ([string]$run1.result.sender_envelope.campaign_id) -Message "adapter_request campaign_id mismatch."
+      Assert-Equal -Actual ([string]$request.channel) -Expected ([string]$run1.result.sender_envelope.channel) -Message "adapter_request channel mismatch."
+      Assert-Equal -Actual ([string]$request.language_code) -Expected ([string]$run1.result.sender_envelope.language_code) -Message "adapter_request language_code mismatch."
+      Assert-Equal -Actual ([string]$request.selected_variant_id) -Expected ([string]$run1.result.sender_envelope.selected_variant_id) -Message "adapter_request variant mismatch."
+      Assert-Equal -Actual ([string]$request.provider_mode) -Expected "mock" -Message "adapter_request provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$request.dry_run) -Expected $true -Message "adapter_request dry_run mismatch."
+
+      $scheduled = @($request.scheduled_actions)
+      Assert-Equal -Actual $scheduled.Count -Expected 2 -Message "adapter_request scheduled_actions should contain exactly two entries."
+      Assert-Equal -Actual ([string]$scheduled[0].action_type) -Expected "cta_buy" -Message "adapter_request scheduled action ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$scheduled[1].action_type) -Expected "cta_subscribe" -Message "adapter_request scheduled action ordering mismatch for cta_subscribe."
+      Assert-Equal -Actual ([string]$scheduled[0].action_stub) -Expected ([string]$run1.result.sender_envelope.scheduled_actions[0].action_stub) -Message "adapter_request cta_buy action_stub mismatch."
+      Assert-Equal -Actual ([string]$scheduled[1].action_stub) -Expected ([string]$run1.result.sender_envelope.scheduled_actions[1].action_stub) -Message "adapter_request cta_subscribe action_stub mismatch."
+      Assert-Equal -Actual ([string]$scheduled[0].ad_copy) -Expected ([string]$run1.result.sender_envelope.scheduled_actions[0].ad_copy) -Message "adapter_request cta_buy ad_copy mismatch."
+      Assert-Equal -Actual ([string]$scheduled[0].reply_template) -Expected ([string]$run1.result.sender_envelope.scheduled_actions[0].reply_template) -Message "adapter_request cta_buy reply_template mismatch."
+
+      Assert-Contains -Collection @($request.reason_codes) -Value "adapter_request_emitted" -Message "adapter_request should include emission reason code."
+      Assert-Contains -Collection @($request.reason_codes) -Value "template_lang_native" -Message "adapter_request should include template lineage."
+      Assert-Contains -Collection @($request.reason_codes) -Value "variant_lang_perf_win" -Message "adapter_request should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($request.PSObject.Properties.Name -contains $forbidden)) -Message "adapter_request must not expose $forbidden."
+      }
+
+      Assert-Equal -Actual ([string]$run1.result.adapter_request.idempotency_key) -Expected ([string]$run2.result.adapter_request.idempotency_key) -Message "idempotency_key must remain stable across repeated runs."
+      $requestJson1 = ($run1.result.adapter_request | ConvertTo-Json -Depth 40 -Compress)
+      $requestJson2 = ($run2.result.adapter_request | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $requestJson1 -Expected $requestJson2 -Message "adapter_request must remain deterministic across repeated runs."
+
+      $taskChangedCampaign = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv014-002"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 940; conversion_bps = 290; impressions = 710 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv014-002"; segment = "saas"; pain_match = $true; budget = 2900; engagement_score = 86 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $runChanged = Invoke-RevenueRun -Config $config -Task $taskChangedCampaign
+      Assert-True -Condition (([string]$run1.result.adapter_request.idempotency_key) -ne ([string]$runChanged.result.adapter_request.idempotency_key)) -Message "idempotency_key should change when campaign lineage changes."
+    }
+
+    It "does not emit adapter_request for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.adapter_request) -Message "Malformed lead payload must not emit adapter_request."
     }
   }
 }
