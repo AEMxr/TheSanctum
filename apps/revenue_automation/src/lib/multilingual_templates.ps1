@@ -86,9 +86,13 @@ function Get-LanguageProfileResolution {
   $profileKey = $normalizedLanguage
   $profileReasonCodes = New-Object System.Collections.Generic.List[string]
 
-  $resolverPath = Join-Path $PSScriptRoot "..\..\..\..\core\localization\profile_resolver.ps1"
-  if (Test-Path -Path $resolverPath -PathType Leaf) {
-    . $resolverPath
+  $resolverCandidates = @(
+    (Join-Path $PSScriptRoot "..\..\..\..\apps\core\localization\profile_resolver.ps1"),
+    (Join-Path $PSScriptRoot "..\..\..\..\core\localization\profile_resolver.ps1")
+  )
+  $resolverPath = @($resolverCandidates | Where-Object { Test-Path -Path $_ -PathType Leaf } | Select-Object -First 1)
+  if ($resolverPath.Count -gt 0) {
+    . $resolverPath[0]
     $resolved = Resolve-LocalizationProfile -LanguageCodeInput $languageInput -RegionCodeInput $regionInput
     if ($null -ne $resolved -and -not [string]::IsNullOrWhiteSpace([string]$resolved.profile_key)) {
       $profileKey = ([string]$resolved.profile_key).Trim().ToLowerInvariant()
@@ -210,7 +214,33 @@ function Merge-ProposalWithLocalizedTemplates {
       [void]$proposalReasonCodes.Add([string]$rc)
     }
   }
+
+  $profileReasonCodes = @(
+    @((Get-RevenueObjectPropertyValue -Value $resolution -Name "reason_codes")) +
+    @((Get-RevenueObjectPropertyValue -Value $resolution -Name "profile_reason_codes")) +
+    @((Get-RevenueObjectPropertyValue -Value $resolution -Name "resolution_reason_codes"))
+  ) |
+    ForEach-Object { [string]$_ } |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+
+  if (@($profileReasonCodes).Count -eq 0) {
+    if ($templateReasonCode -eq "template_lang_native") {
+      $profileReasonCodes = @("profile_exact_match")
+    }
+    elseif ($templateReasonCode -eq "template_lang_fallback_en") {
+      $profileReasonCodes = @("profile_global_fallback")
+    }
+  }
+
+  foreach ($rc in @($profileReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$proposalReasonCodes.Add([string]$rc)
+    }
+  }
   [void]$proposalReasonCodes.Add($templateReasonCode)
+
+  $mergedReasonCodes = @($proposalReasonCodes | Select-Object -Unique)
 
   return [pscustomobject]@{
     proposal = [pscustomobject]@{
@@ -221,7 +251,7 @@ function Merge-ProposalWithLocalizedTemplates {
       setup_fee_usd = [int](Get-RevenueObjectPropertyValue -Value $Proposal -Name "setup_fee_usd")
       due_now_usd = [int](Get-RevenueObjectPropertyValue -Value $Proposal -Name "due_now_usd")
       checkout_stub = [string](Get-RevenueObjectPropertyValue -Value $Proposal -Name "checkout_stub")
-      reason_codes = @($proposalReasonCodes | Select-Object -Unique)
+      reason_codes = @($mergedReasonCodes)
       ad_copy = [string]$templateData.ad_copy
       short_reply_templates = @($templateData.short_reply_templates | ForEach-Object { [string]$_ })
       cta_buy_text = [string]$templateData.cta_buy_text
@@ -229,6 +259,6 @@ function Merge-ProposalWithLocalizedTemplates {
       template_language = [string]$templateLanguage
       template_profile_key = [string]$resolution.profile_key
     }
-    reason_codes = @($templateReasonCode)
+    reason_codes = @($mergedReasonCodes)
   }
 }

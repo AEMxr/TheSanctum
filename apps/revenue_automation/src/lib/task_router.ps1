@@ -968,7 +968,12 @@ function Invoke-RevenueTaskRoute {
     $proposal = Get-DeterministicProposalFromOffer -Offer $offer
     $localizedProposal = Merge-ProposalWithLocalizedTemplates -Task $Task -Proposal $proposal
     $proposal = $localizedProposal.proposal
-    $templateReasonCodes = @($localizedProposal.reason_codes | ForEach-Object { [string]$_ })
+    $templateReasonCodes = @(
+      $localizedProposal.reason_codes |
+        ForEach-Object { [string]$_ } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique
+    )
     $variant = Get-LanguageAwareVariantSelection -Task $Task
     $variantReasonCodes = @($variant.selection_reason_codes | ForEach-Object { [string]$_ })
 

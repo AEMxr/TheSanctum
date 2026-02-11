@@ -736,6 +736,7 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run1.result.proposal) -Message "Spanish template run should emit proposal."
       Assert-Equal -Actual ([string]$run1.result.proposal.template_language) -Expected "es" -Message "Spanish template should use native language."
       Assert-Contains -Collection @($run1.result.proposal.reason_codes) -Value "template_lang_native" -Message "Spanish template should include native reason code."
+      Assert-Contains -Collection @($run1.result.proposal.reason_codes) -Value "profile_exact_match" -Message "Spanish template should include localization profile resolution reason code."
       Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.ad_copy)) -Message "Spanish template should include ad_copy."
       Assert-True -Condition (@($run1.result.proposal.short_reply_templates).Count -gt 0) -Message "Spanish template should include short replies."
       Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.cta_buy_text)) -Message "Spanish template should include buy CTA text."
@@ -773,6 +774,7 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -ne $run.result.proposal) -Message "Fallback language run should emit proposal."
       Assert-Equal -Actual ([string]$run.result.proposal.template_language) -Expected "en" -Message "Unsupported language should fallback to en templates."
       Assert-Contains -Collection @($run.result.proposal.reason_codes) -Value "template_lang_fallback_en" -Message "Fallback language run should include fallback reason code."
+      Assert-Contains -Collection @($run.result.proposal.reason_codes) -Value "profile_global_fallback" -Message "Fallback language run should include profile fallback reason code."
     }
 
     It "preserves clean FAILED behavior for malformed lead payloads without proposal templates" {

@@ -42,5 +42,6 @@ Generate deterministic multilingual ad and reply templates per offer tier using 
 
 ## Execution notes
 - Stable reason codes: `template_lang_native`, `template_lang_fallback_en`.
+- Localization profile resolution reason codes are preserved in proposal/template lineage.
 - Keep existing route/offer/proposal fields backward-compatible.
 - Next first command: `Get-Content docs/tasks/TASK-RV-010.md -Raw`
