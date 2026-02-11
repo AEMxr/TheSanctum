@@ -780,6 +780,76 @@ function Get-DeterministicCampaignPacket {
   }
 }
 
+function Get-DeterministicDispatchPlan {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][object]$CampaignPacket,
+    [Parameter(Mandatory = $true)][object]$Proposal,
+    [object]$Variant = $null,
+    [string[]]$ReasonCodes = @()
+  )
+
+  $taskId = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
+  if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = "task-unknown" }
+
+  $campaignId = [string](Get-ObjectPropertyValue -Value $CampaignPacket -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+
+  $channel = "web"
+  $channels = @((Get-ObjectPropertyValue -Value $CampaignPacket -Name "channels"))
+  if ($channels.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$channels[0])) {
+    $channel = [string]$channels[0]
+  }
+
+  $languageCode = [string](Get-ObjectPropertyValue -Value $Proposal -Name "template_language")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+
+  $selectedVariantId = ""
+  if ($null -ne $Variant -and (Get-ObjectPropertyNames -Value $Variant) -contains "selected_variant_id") {
+    $selectedVariantId = [string](Get-ObjectPropertyValue -Value $Variant -Name "selected_variant_id")
+  }
+
+  $adCopy = [string](Get-ObjectPropertyValue -Value $Proposal -Name "ad_copy")
+  $replyTemplate = ""
+  $shortReplies = @((Get-ObjectPropertyValue -Value $Proposal -Name "short_reply_templates"))
+  if ($shortReplies.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$shortReplies[0])) {
+    $replyTemplate = [string]$shortReplies[0]
+  }
+
+  $buyStub = [string](Get-ObjectPropertyValue -Value $CampaignPacket -Name "cta_buy_stub")
+  if ([string]::IsNullOrWhiteSpace($buyStub)) {
+    $buyStub = [string](Get-ObjectPropertyValue -Value $Proposal -Name "checkout_stub")
+  }
+  $subscribeStub = [string](Get-ObjectPropertyValue -Value $CampaignPacket -Name "cta_subscribe_stub")
+
+  $dispatchId = "dispatch-{0}-{1}-{2}-{3}" -f `
+    (New-SafeTelemetryId -Value $taskId), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $selectedVariantId)
+
+  $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("dispatch_plan_emitted")
+  foreach ($rc in @($ReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+
+  return [pscustomobject]@{
+    dispatch_id = $dispatchId
+    campaign_id = $campaignId
+    channel = $channel
+    language_code = $languageCode
+    selected_variant_id = $selectedVariantId
+    ad_copy = $adCopy
+    reply_template = $replyTemplate
+    cta_buy_stub = $buyStub
+    cta_subscribe_stub = $subscribeStub
+    reason_codes = @($reasonList | Select-Object -Unique)
+  }
+}
+
 function Invoke-RevenueTaskRoute {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -808,6 +878,7 @@ function Invoke-RevenueTaskRoute {
       telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
       telemetry_event = $null
       campaign_packet = $null
+      dispatch_plan = $null
     }
   }
 
@@ -825,6 +896,7 @@ function Invoke-RevenueTaskRoute {
       telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
       telemetry_event = $null
       campaign_packet = $null
+      dispatch_plan = $null
     }
   }
 
@@ -848,6 +920,7 @@ function Invoke-RevenueTaskRoute {
         telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy -Routing $routing
         telemetry_event = $null
         campaign_packet = $null
+        dispatch_plan = $null
       }
     }
   }
@@ -875,6 +948,7 @@ function Invoke-RevenueTaskRoute {
         telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy
         telemetry_event = $null
         campaign_packet = $null
+        dispatch_plan = $null
       }
     }
   }
@@ -887,6 +961,7 @@ function Invoke-RevenueTaskRoute {
   $resultReasonCodes = @()
   $telemetryEvent = $null
   $campaignPacket = $null
+  $dispatchPlan = $null
 
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
@@ -919,6 +994,13 @@ function Invoke-RevenueTaskRoute {
       -Proposal $proposal `
       -Variant $variant `
       -ReasonCodes $resultReasonCodes
+
+    $dispatchPlan = Get-DeterministicDispatchPlan `
+      -Task $Task `
+      -CampaignPacket $campaignPacket `
+      -Proposal $proposal `
+      -Variant $variant `
+      -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
     $resultReasonCodes = @($routing.reason_codes | ForEach-Object { [string]$_ })
@@ -947,5 +1029,6 @@ function Invoke-RevenueTaskRoute {
     telemetry_event_stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $policy -Routing $routing -Variant $variant
     telemetry_event = $telemetryEvent
     campaign_packet = $campaignPacket
+    dispatch_plan = $dispatchPlan
   }
 }

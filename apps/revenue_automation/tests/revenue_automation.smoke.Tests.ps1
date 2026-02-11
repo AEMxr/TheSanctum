@@ -264,7 +264,8 @@ Describe "revenue automation scaffold smoke" {
         "proposal",
         "telemetry_event_stub",
         "telemetry_event",
-        "campaign_packet"
+        "campaign_packet",
+        "dispatch_plan"
       )
 
       foreach ($field in $requiredFields) {
@@ -1073,6 +1074,102 @@ Describe "revenue automation scaffold smoke" {
       $packet1 = ($run1.result.campaign_packet | ConvertTo-Json -Depth 30 -Compress)
       $packet2 = ($run2.result.campaign_packet | ConvertTo-Json -Depth 30 -Compress)
       Assert-Equal -Actual $packet1 -Expected $packet2 -Message "Campaign packet must remain deterministic across repeated runs."
+    }
+  }
+
+  Context "14) deterministic localized dispatch plan contract" {
+    It "emits deterministic dispatch_plan with lineage and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv009-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 900; conversion_bps = 260; impressions = 600 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv009-001"; segment = "saas"; pain_match = $true; budget = 2500; engagement_score = 81 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Dispatch plan run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Dispatch plan run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.dispatch_plan) -Message "Successful lead_enrich should emit dispatch_plan."
+
+      $dispatch = $run1.result.dispatch_plan
+      $requiredDispatchFields = @(
+        "dispatch_id",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "ad_copy",
+        "reply_template",
+        "cta_buy_stub",
+        "cta_subscribe_stub",
+        "reason_codes"
+      )
+      foreach ($field in $requiredDispatchFields) {
+        Assert-True -Condition ($dispatch.PSObject.Properties.Name -contains $field) -Message "dispatch_plan missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$dispatch.campaign_id) -Expected "camp-rv009-001" -Message "Dispatch campaign_id mismatch."
+      Assert-Equal -Actual ([string]$dispatch.channel) -Expected "reddit" -Message "Dispatch channel mismatch."
+      Assert-Equal -Actual ([string]$dispatch.language_code) -Expected "es" -Message "Dispatch language_code mismatch."
+      Assert-Equal -Actual ([string]$dispatch.selected_variant_id) -Expected ([string]$run1.result.route.variant.selected_variant_id) -Message "Dispatch variant lineage mismatch."
+      Assert-Contains -Collection @($dispatch.reason_codes) -Value "dispatch_plan_emitted" -Message "Dispatch plan should include emission reason code."
+      Assert-Contains -Collection @($dispatch.reason_codes) -Value "template_lang_native" -Message "Dispatch plan should include template reason lineage."
+      Assert-Contains -Collection @($dispatch.reason_codes) -Value "variant_lang_perf_win" -Message "Dispatch plan should include variant reason lineage."
+
+      Assert-True -Condition (-not ($dispatch.PSObject.Properties.Name -contains "latitude")) -Message "dispatch_plan must not expose latitude."
+      Assert-True -Condition (-not ($dispatch.PSObject.Properties.Name -contains "longitude")) -Message "dispatch_plan must not expose longitude."
+
+      $dispatchJson1 = ($run1.result.dispatch_plan | ConvertTo-Json -Depth 30 -Compress)
+      $dispatchJson2 = ($run2.result.dispatch_plan | ConvertTo-Json -Depth 30 -Compress)
+      Assert-Equal -Actual $dispatchJson1 -Expected $dispatchJson2 -Message "dispatch_plan must remain deterministic across repeated runs."
+    }
+
+    It "does not emit dispatch_plan for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.dispatch_plan) -Message "Malformed lead payload must not emit dispatch_plan."
     }
   }
 }

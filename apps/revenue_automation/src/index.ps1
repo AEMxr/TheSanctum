@@ -181,6 +181,7 @@ $result = [pscustomobject]@{
   telemetry_event_stub = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event_stub") { $routeResult.telemetry_event_stub } else { $null }
   telemetry_event = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event") { $routeResult.telemetry_event } else { $null }
   campaign_packet = if ($routeResult.PSObject.Properties.Name -contains "campaign_packet") { $routeResult.campaign_packet } else { $null }
+  dispatch_plan = if ($routeResult.PSObject.Properties.Name -contains "dispatch_plan") { $routeResult.dispatch_plan } else { $null }
 }
 
 if ($config.emit_telemetry) {
