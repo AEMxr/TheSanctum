@@ -273,7 +273,8 @@ Describe "revenue automation scaffold smoke" {
         "audit_record",
         "evidence_envelope",
         "retention_manifest",
-        "immutability_receipt"
+        "immutability_receipt",
+        "ledger_attestation"
       )
 
       foreach ($field in $requiredFields) {
@@ -2211,6 +2212,131 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.immutability_receipt) -Message "Malformed lead payload must not emit immutability_receipt."
+    }
+  }
+
+  Context "23) deterministic ledger attestation contract" {
+    It "emits deterministic ledger_attestation with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv021-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 995; conversion_bps = 350; impressions = 770 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv021-001"; segment = "saas"; pain_match = $true; budget = 3900; engagement_score = 97 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Ledger attestation run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Ledger attestation run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.ledger_attestation) -Message "Successful lead_enrich should emit ledger_attestation."
+
+      $attestation = $run1.result.ledger_attestation
+      $requiredAttestationFields = @(
+        "attestation_id",
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredAttestationFields) {
+        Assert-True -Condition ($attestation.PSObject.Properties.Name -contains $field) -Message "ledger_attestation missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$attestation.immutability_id) -Expected ([string]$run1.result.immutability_receipt.immutability_id) -Message "ledger_attestation immutability_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.manifest_id) -Expected ([string]$run1.result.immutability_receipt.manifest_id) -Message "ledger_attestation manifest_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.envelope_id) -Expected ([string]$run1.result.immutability_receipt.envelope_id) -Message "ledger_attestation envelope_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.record_id) -Expected ([string]$run1.result.immutability_receipt.record_id) -Message "ledger_attestation record_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.event_id) -Expected ([string]$run1.result.immutability_receipt.event_id) -Message "ledger_attestation event_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.receipt_id) -Expected ([string]$run1.result.immutability_receipt.receipt_id) -Message "ledger_attestation receipt_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.request_id) -Expected ([string]$run1.result.immutability_receipt.request_id) -Message "ledger_attestation request_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.idempotency_key) -Expected ([string]$run1.result.immutability_receipt.idempotency_key) -Message "ledger_attestation idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$attestation.campaign_id) -Expected ([string]$run1.result.immutability_receipt.campaign_id) -Message "ledger_attestation campaign_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.channel) -Expected ([string]$run1.result.immutability_receipt.channel) -Message "ledger_attestation channel mismatch."
+      Assert-Equal -Actual ([string]$attestation.language_code) -Expected ([string]$run1.result.immutability_receipt.language_code) -Message "ledger_attestation language_code mismatch."
+      Assert-Equal -Actual ([string]$attestation.selected_variant_id) -Expected ([string]$run1.result.immutability_receipt.selected_variant_id) -Message "ledger_attestation selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$attestation.provider_mode) -Expected "mock" -Message "ledger_attestation provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$attestation.dry_run) -Expected $true -Message "ledger_attestation dry_run mismatch."
+      Assert-Equal -Actual ([string]$attestation.status) -Expected "simulated" -Message "ledger_attestation status mismatch."
+
+      $acceptedActionTypes = @($attestation.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "ledger_attestation accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "ledger_attestation accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "ledger_attestation accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($attestation.reason_codes) -Value "ledger_attestation_emitted" -Message "ledger_attestation should include emission reason code."
+      Assert-Contains -Collection @($attestation.reason_codes) -Value "dispatch_receipt_dry_run" -Message "ledger_attestation should include dry-run receipt lineage."
+      Assert-Contains -Collection @($attestation.reason_codes) -Value "template_lang_native" -Message "ledger_attestation should include template lineage."
+      Assert-Contains -Collection @($attestation.reason_codes) -Value "variant_lang_perf_win" -Message "ledger_attestation should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($attestation.PSObject.Properties.Name -contains $forbidden)) -Message "ledger_attestation must not expose $forbidden."
+      }
+
+      $attestationJson1 = ($run1.result.ledger_attestation | ConvertTo-Json -Depth 40 -Compress)
+      $attestationJson2 = ($run2.result.ledger_attestation | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $attestationJson1 -Expected $attestationJson2 -Message "ledger_attestation must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.ledger_attestation.idempotency_key) -Expected ([string]$run2.result.ledger_attestation.idempotency_key) -Message "ledger_attestation idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit ledger_attestation for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.ledger_attestation) -Message "Malformed lead payload must not emit ledger_attestation."
     }
   }
 }

@@ -191,6 +191,7 @@ $result = [pscustomobject]@{
   evidence_envelope = if ($routeResult.PSObject.Properties.Name -contains "evidence_envelope") { $routeResult.evidence_envelope } else { $null }
   retention_manifest = if ($routeResult.PSObject.Properties.Name -contains "retention_manifest") { $routeResult.retention_manifest } else { $null }
   immutability_receipt = if ($routeResult.PSObject.Properties.Name -contains "immutability_receipt") { $routeResult.immutability_receipt } else { $null }
+  ledger_attestation = if ($routeResult.PSObject.Properties.Name -contains "ledger_attestation") { $routeResult.ledger_attestation } else { $null }
 }
 
 if ($config.emit_telemetry) {
