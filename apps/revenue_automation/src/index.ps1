@@ -179,6 +179,7 @@ $result = [pscustomobject]@{
   offer = if ($routeResult.PSObject.Properties.Name -contains "offer") { $routeResult.offer } else { $null }
   proposal = if ($routeResult.PSObject.Properties.Name -contains "proposal") { $routeResult.proposal } else { $null }
   telemetry_event_stub = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event_stub") { $routeResult.telemetry_event_stub } else { $null }
+  # Preserve telemetry passthrough as a first-class output contract field.
   telemetry_event = if ($routeResult.PSObject.Properties.Name -contains "telemetry_event") { $routeResult.telemetry_event } else { $null }
   campaign_packet = if ($routeResult.PSObject.Properties.Name -contains "campaign_packet") { $routeResult.campaign_packet } else { $null }
   dispatch_plan = if ($routeResult.PSObject.Properties.Name -contains "dispatch_plan") { $routeResult.dispatch_plan } else { $null }

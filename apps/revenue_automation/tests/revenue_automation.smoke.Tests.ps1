@@ -1013,21 +1013,83 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.selected_variant_id) -Expected ([string]$run1.result.route.variant.selected_variant_id) -Message "Telemetry stub selected_variant_id mismatch."
 
       Assert-True -Condition ($null -ne $run1.result.telemetry_event) -Message "Result should include telemetry_event on successful lead_enrich."
+      $requiredTelemetryFields = @(
+        "event_id",
+        "event_type",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredTelemetryFields) {
+        Assert-True -Condition ($run1.result.telemetry_event.PSObject.Properties.Name -contains $field) -Message "telemetry_event missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.event_type) -Expected "dispatch_receipt" -Message "Telemetry event type mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.receipt_id) -Expected ([string]$run1.result.dispatch_receipt.receipt_id) -Message "Telemetry event receipt_id mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.request_id) -Expected ([string]$run1.result.dispatch_receipt.request_id) -Message "Telemetry event request_id mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.idempotency_key) -Expected ([string]$run1.result.dispatch_receipt.idempotency_key) -Message "Telemetry event idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.channel) -Expected ([string]$run1.result.dispatch_receipt.channel) -Message "Telemetry event channel mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.provider_mode) -Expected "mock" -Message "Telemetry event provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$run1.result.telemetry_event.dry_run) -Expected $true -Message "Telemetry event dry_run mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.status) -Expected "simulated" -Message "Telemetry event status mismatch."
+
+      $acceptedActionTypes = @($run1.result.telemetry_event.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "Telemetry event accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "Telemetry event accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "Telemetry event accepted_action_types ordering mismatch for cta_subscribe."
+
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.language_code) -Expected "es" -Message "Telemetry event language_code mismatch."
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.region_code) -Expected "MX" -Message "Telemetry event region_code mismatch."
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.geo_coarse) -Expected "mx-north" -Message "Telemetry event geo_coarse mismatch."
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.source_channel) -Expected "reddit" -Message "Telemetry event source_channel mismatch."
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.campaign_id) -Expected "camp-001" -Message "Telemetry event campaign_id mismatch."
       Assert-Equal -Actual ([string]$run1.result.telemetry_event.selected_variant_id) -Expected ([string]$run1.result.route.variant.selected_variant_id) -Message "Telemetry event selected_variant_id mismatch."
+      Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "telemetry_event_emitted" -Message "Telemetry event should include emission reason code."
+      Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "dispatch_receipt_dry_run" -Message "Telemetry event should include dry-run receipt lineage."
       Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "template_lang_native" -Message "Telemetry event should carry template reason lineage."
       Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "variant_lang_perf_win" -Message "Telemetry event should carry variant reason lineage."
 
-      Assert-True -Condition (-not ($run1.result.telemetry_event_stub.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry stub must not expose latitude."
-      Assert-True -Condition (-not ($run1.result.telemetry_event_stub.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry stub must not expose longitude."
-      Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry event must not expose latitude."
-      Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry event must not expose longitude."
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($run1.result.telemetry_event_stub.PSObject.Properties.Name -contains $forbidden)) -Message "Telemetry stub must not expose $forbidden."
+        Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains $forbidden)) -Message "Telemetry event must not expose $forbidden."
+      }
 
       Assert-Equal -Actual (($run1.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Expected (($run2.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Message "Telemetry event must remain deterministic across repeated runs."
+    }
+
+    It "does not emit telemetry_event for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.telemetry_event) -Message "Malformed lead payload must not emit telemetry_event."
     }
   }
 

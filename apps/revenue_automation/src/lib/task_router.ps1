@@ -642,41 +642,87 @@ function New-SafeTelemetryId {
 function Get-DeterministicMarketingTelemetryEvent {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
-    [Parameter(Mandatory = $true)][object]$Policy,
-    [Parameter(Mandatory = $true)][object]$Routing,
-    [object]$Variant = $null,
-    [object]$Offer = $null,
-    [object]$Proposal = $null,
+    [Parameter(Mandatory = $true)][object]$DispatchReceipt,
     [string[]]$ReasonCodes = @()
   )
-
-  $stub = Get-RevenueTelemetryEventStub -Task $Task -Policy $Policy -Routing $Routing -Variant $Variant
 
   $taskIdRaw = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
   $taskId = if ([string]::IsNullOrWhiteSpace($taskIdRaw)) { "task-unknown" } else { $taskIdRaw.Trim() }
   $taskType = [string](Get-ObjectPropertyValue -Value $Task -Name "task_type")
   if ([string]::IsNullOrWhiteSpace($taskType)) { $taskType = "unknown" }
 
-  $selectedRoute = [string]$stub.selected_route
-  $selectedVariant = [string]$stub.selected_variant_id
-  $campaignId = [string]$stub.campaign_id
-  $proposalId = ""
-  if ($null -ne $Proposal -and (Get-ObjectPropertyNames -Value $Proposal) -contains "proposal_id") {
-    $proposalId = [string](Get-ObjectPropertyValue -Value $Proposal -Name "proposal_id")
+  $payload = Get-ObjectPropertyValue -Value $Task -Name "payload"
+  $regionCode = "ZZ"
+  $geoCoarse = "unknown"
+  if (Test-ObjectLike -Value $payload) {
+    $regionCandidates = @(
+      [string](Get-ObjectPropertyValue -Value $payload -Name "region_code"),
+      [string](Get-ObjectPropertyValue -Value $payload -Name "region")
+    )
+    foreach ($candidate in $regionCandidates) {
+      if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+        $regionCode = $candidate.Trim().ToUpperInvariant()
+        break
+      }
+    }
+
+    $geoCandidate = [string](Get-ObjectPropertyValue -Value $payload -Name "geo_coarse")
+    if (-not [string]::IsNullOrWhiteSpace($geoCandidate)) {
+      $geoCoarse = $geoCandidate.Trim()
+    }
+    elseif ($regionCode -ne "ZZ") {
+      $geoCoarse = $regionCode
+    }
   }
 
-  $offerTier = ""
-  if ($null -ne $Offer -and (Get-ObjectPropertyNames -Value $Offer) -contains "tier") {
-    $offerTier = [string](Get-ObjectPropertyValue -Value $Offer -Name "tier")
+  $receiptId = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "receipt_id")
+  if ([string]::IsNullOrWhiteSpace($receiptId)) { $receiptId = "receipt-unknown" }
+  $requestId = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "request_id")
+  if ([string]::IsNullOrWhiteSpace($requestId)) { $requestId = "adapter-unknown" }
+  $idempotencyKey = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "idempotency_key")
+  if ([string]::IsNullOrWhiteSpace($idempotencyKey)) { $idempotencyKey = "idem-unknown" }
+  $campaignId = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+  $channel = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "channel")
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "web" }
+  $languageCode = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "language_code")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  $selectedVariant = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "selected_variant_id")
+  $providerMode = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "provider_mode")
+  if ([string]::IsNullOrWhiteSpace($providerMode)) { $providerMode = "mock" }
+  $dryRun = [bool](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "dry_run")
+  $dispatchStatus = [string](Get-ObjectPropertyValue -Value $DispatchReceipt -Name "status")
+  if ([string]::IsNullOrWhiteSpace($dispatchStatus)) { $dispatchStatus = "unknown" }
+
+  $actionsByType = @{}
+  foreach ($a in @((Get-ObjectPropertyValue -Value $DispatchReceipt -Name "accepted_actions"))) {
+    if ($null -eq $a) { continue }
+    $actionType = ([string](Get-ObjectPropertyValue -Value $a -Name "action_type")).Trim()
+    if ([string]::IsNullOrWhiteSpace($actionType)) { continue }
+    $actionsByType[$actionType] = $true
   }
 
-  $eventId = "mte-{0}-{1}-{2}-{3}" -f `
+  $acceptedActionTypes = @()
+  foreach ($actionType in @("cta_buy", "cta_subscribe")) {
+    if ($actionsByType.Contains($actionType)) {
+      $acceptedActionTypes += $actionType
+    }
+  }
+
+  $eventId = "mte-{0}-{1}-{2}-{3}-{4}" -f `
     (New-SafeTelemetryId -Value $taskId), `
-    (New-SafeTelemetryId -Value $selectedRoute), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
     (New-SafeTelemetryId -Value $selectedVariant), `
-    (New-SafeTelemetryId -Value $campaignId)
+    (New-SafeTelemetryId -Value $receiptId)
 
   $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("telemetry_event_emitted")
+  foreach ($rc in @((Get-ObjectPropertyValue -Value $DispatchReceipt -Name "reason_codes"))) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
   foreach ($rc in @($ReasonCodes)) {
     if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
       [void]$reasonList.Add([string]$rc)
@@ -685,19 +731,23 @@ function Get-DeterministicMarketingTelemetryEvent {
 
   return [pscustomobject]@{
     event_id = $eventId
-    event_type = "marketing_decision"
+    event_type = "dispatch_receipt"
     task_id = $taskId
     task_type = $taskType
-    source_channel = [string]$stub.source_channel
+    receipt_id = $receiptId
+    request_id = $requestId
+    idempotency_key = $idempotencyKey
     campaign_id = $campaignId
-    language_code = [string]$stub.language_code
-    region_code = [string]$stub.region_code
-    geo_coarse = [string]$stub.geo_coarse
-    selected_route = $selectedRoute
+    channel = $channel
+    source_channel = $channel
+    language_code = $languageCode
+    region_code = $regionCode
+    geo_coarse = $geoCoarse
     selected_variant_id = $selectedVariant
-    policy_allowed = [bool]$stub.policy_allowed
-    offer_tier = $offerTier
-    proposal_id = $proposalId
+    provider_mode = $providerMode
+    dry_run = $dryRun
+    status = $dispatchStatus
+    accepted_action_types = @($acceptedActionTypes)
     reason_codes = @($reasonList | Select-Object -Unique)
   }
 }
@@ -1338,15 +1388,6 @@ function Invoke-RevenueTaskRoute {
       @($variantReasonCodes | ForEach-Object { [string]$_ })
     ) | Select-Object -Unique
 
-    $telemetryEvent = Get-DeterministicMarketingTelemetryEvent `
-      -Task $Task `
-      -Policy $policy `
-      -Routing $routing `
-      -Variant $variant `
-      -Offer $offer `
-      -Proposal $proposal `
-      -ReasonCodes $resultReasonCodes
-
     $campaignPacket = Get-DeterministicCampaignPacket `
       -Task $Task `
       -Routing $routing `
@@ -1381,6 +1422,11 @@ function Invoke-RevenueTaskRoute {
     $dispatchReceipt = Get-DeterministicDispatchReceipt `
       -Task $Task `
       -AdapterRequest $adapterRequest `
+      -ReasonCodes $resultReasonCodes
+
+    $telemetryEvent = Get-DeterministicMarketingTelemetryEvent `
+      -Task $Task `
+      -DispatchReceipt $dispatchReceipt `
       -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
