@@ -1300,6 +1300,107 @@ function Get-DeterministicProofVerification {
   }
 }
 
+function Get-DeterministicAnchorRecord {
+  param(
+    [Parameter(Mandatory = $true)][object]$Task,
+    [Parameter(Mandatory = $true)][object]$ProofVerification,
+    [string[]]$ReasonCodes = @()
+  )
+
+  $taskId = [string](Get-ObjectPropertyValue -Value $Task -Name "task_id")
+  if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = "task-unknown" }
+
+  $verificationId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "verification_id")
+  if ([string]::IsNullOrWhiteSpace($verificationId)) { $verificationId = "verify-unknown" }
+  $attestationId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "attestation_id")
+  if ([string]::IsNullOrWhiteSpace($attestationId)) { $attestationId = "attestation-unknown" }
+  $immutabilityId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "immutability_id")
+  if ([string]::IsNullOrWhiteSpace($immutabilityId)) { $immutabilityId = "immutability-unknown" }
+  $manifestId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "manifest_id")
+  if ([string]::IsNullOrWhiteSpace($manifestId)) { $manifestId = "retention-unknown" }
+  $envelopeId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "envelope_id")
+  if ([string]::IsNullOrWhiteSpace($envelopeId)) { $envelopeId = "evidence-unknown" }
+  $recordId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "record_id")
+  if ([string]::IsNullOrWhiteSpace($recordId)) { $recordId = "audit-unknown" }
+  $eventId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "event_id")
+  if ([string]::IsNullOrWhiteSpace($eventId)) { $eventId = "mte-unknown" }
+  $receiptId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "receipt_id")
+  if ([string]::IsNullOrWhiteSpace($receiptId)) { $receiptId = "receipt-unknown" }
+  $requestId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "request_id")
+  if ([string]::IsNullOrWhiteSpace($requestId)) { $requestId = "adapter-unknown" }
+  $idempotencyKey = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "idempotency_key")
+  if ([string]::IsNullOrWhiteSpace($idempotencyKey)) { $idempotencyKey = "idem-unknown" }
+  $campaignId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "campaign_id")
+  if ([string]::IsNullOrWhiteSpace($campaignId)) { $campaignId = "campaign-unknown" }
+  $channel = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "channel")
+  if ([string]::IsNullOrWhiteSpace($channel)) { $channel = "web" }
+  $languageCode = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "language_code")
+  if ([string]::IsNullOrWhiteSpace($languageCode)) { $languageCode = "und" }
+  $selectedVariantId = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "selected_variant_id")
+  $providerMode = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "provider_mode")
+  if ([string]::IsNullOrWhiteSpace($providerMode)) { $providerMode = "mock" }
+  $dryRun = [bool](Get-ObjectPropertyValue -Value $ProofVerification -Name "dry_run")
+  $status = [string](Get-ObjectPropertyValue -Value $ProofVerification -Name "status")
+  if ([string]::IsNullOrWhiteSpace($status)) { $status = "unknown" }
+
+  $actionLookup = @{}
+  foreach ($actionType in @((Get-ObjectPropertyValue -Value $ProofVerification -Name "accepted_action_types"))) {
+    $typeValue = ([string]$actionType).Trim()
+    if ([string]::IsNullOrWhiteSpace($typeValue)) { continue }
+    $actionLookup[$typeValue] = $true
+  }
+
+  $acceptedActionTypes = @()
+  foreach ($actionType in @("cta_buy", "cta_subscribe")) {
+    if ($actionLookup.Contains($actionType)) {
+      $acceptedActionTypes += $actionType
+    }
+  }
+
+  $anchorId = "anchor-{0}-{1}-{2}-{3}-{4}" -f `
+    (New-SafeTelemetryId -Value $taskId), `
+    (New-SafeTelemetryId -Value $campaignId), `
+    (New-SafeTelemetryId -Value $channel), `
+    (New-SafeTelemetryId -Value $selectedVariantId), `
+    (New-SafeTelemetryId -Value $verificationId)
+
+  $reasonList = New-Object System.Collections.Generic.List[string]
+  [void]$reasonList.Add("anchor_record_emitted")
+  foreach ($rc in @((Get-ObjectPropertyValue -Value $ProofVerification -Name "reason_codes"))) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+  foreach ($rc in @($ReasonCodes)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$rc)) {
+      [void]$reasonList.Add([string]$rc)
+    }
+  }
+
+  return [pscustomobject]@{
+    anchor_id = $anchorId
+    verification_id = $verificationId
+    attestation_id = $attestationId
+    immutability_id = $immutabilityId
+    manifest_id = $manifestId
+    envelope_id = $envelopeId
+    record_id = $recordId
+    event_id = $eventId
+    receipt_id = $receiptId
+    request_id = $requestId
+    idempotency_key = $idempotencyKey
+    campaign_id = $campaignId
+    channel = $channel
+    language_code = $languageCode
+    selected_variant_id = $selectedVariantId
+    provider_mode = $providerMode
+    dry_run = $dryRun
+    status = $status
+    accepted_action_types = @($acceptedActionTypes)
+    reason_codes = @($reasonList | Select-Object -Unique)
+  }
+}
+
 function Get-DeterministicCampaignPacket {
   param(
     [Parameter(Mandatory = $true)][object]$Task,
@@ -1821,6 +1922,7 @@ function Invoke-RevenueTaskRoute {
       immutability_receipt = $null
       ledger_attestation = $null
       proof_verification = $null
+      anchor_record = $null
     }
   }
 
@@ -1849,6 +1951,7 @@ function Invoke-RevenueTaskRoute {
       immutability_receipt = $null
       ledger_attestation = $null
       proof_verification = $null
+      anchor_record = $null
     }
   }
 
@@ -1883,6 +1986,7 @@ function Invoke-RevenueTaskRoute {
         immutability_receipt = $null
         ledger_attestation = $null
         proof_verification = $null
+        anchor_record = $null
       }
     }
   }
@@ -1921,6 +2025,7 @@ function Invoke-RevenueTaskRoute {
         immutability_receipt = $null
         ledger_attestation = $null
         proof_verification = $null
+        anchor_record = $null
       }
     }
   }
@@ -1944,6 +2049,7 @@ function Invoke-RevenueTaskRoute {
   $immutabilityReceipt = $null
   $ledgerAttestation = $null
   $proofVerification = $null
+  $anchorRecord = $null
 
   if ($taskType -eq "lead_enrich" -and [string]$providerResult.status -eq "SUCCESS" -and $null -ne $routing) {
     $offer = Get-DeterministicOfferFromRouting -Routing $routing
@@ -2036,6 +2142,11 @@ function Invoke-RevenueTaskRoute {
       -Task $Task `
       -LedgerAttestation $ledgerAttestation `
       -ReasonCodes $resultReasonCodes
+
+    $anchorRecord = Get-DeterministicAnchorRecord `
+      -Task $Task `
+      -ProofVerification $proofVerification `
+      -ReasonCodes $resultReasonCodes
   }
   elseif ($null -ne $routing) {
     $resultReasonCodes = @($routing.reason_codes | ForEach-Object { [string]$_ })
@@ -2075,5 +2186,6 @@ function Invoke-RevenueTaskRoute {
     immutability_receipt = $immutabilityReceipt
     ledger_attestation = $ledgerAttestation
     proof_verification = $proofVerification
+    anchor_record = $anchorRecord
   }
 }

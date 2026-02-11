@@ -275,7 +275,8 @@ Describe "revenue automation scaffold smoke" {
         "retention_manifest",
         "immutability_receipt",
         "ledger_attestation",
-        "proof_verification"
+        "proof_verification",
+        "anchor_record"
       )
 
       foreach ($field in $requiredFields) {
@@ -2465,6 +2466,135 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.proof_verification) -Message "Malformed lead payload must not emit proof_verification."
+    }
+  }
+
+  Context "25) deterministic anchor record contract" {
+    It "emits deterministic anchor_record with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv023-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 1000; conversion_bps = 360; impressions = 780 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv023-001"; segment = "saas"; pain_match = $true; budget = 4100; engagement_score = 99 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Anchor record run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Anchor record run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.anchor_record) -Message "Successful lead_enrich should emit anchor_record."
+
+      $anchor = $run1.result.anchor_record
+      $requiredAnchorFields = @(
+        "anchor_id",
+        "verification_id",
+        "attestation_id",
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredAnchorFields) {
+        Assert-True -Condition ($anchor.PSObject.Properties.Name -contains $field) -Message "anchor_record missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$anchor.verification_id) -Expected ([string]$run1.result.proof_verification.verification_id) -Message "anchor_record verification_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.attestation_id) -Expected ([string]$run1.result.proof_verification.attestation_id) -Message "anchor_record attestation_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.immutability_id) -Expected ([string]$run1.result.proof_verification.immutability_id) -Message "anchor_record immutability_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.manifest_id) -Expected ([string]$run1.result.proof_verification.manifest_id) -Message "anchor_record manifest_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.envelope_id) -Expected ([string]$run1.result.proof_verification.envelope_id) -Message "anchor_record envelope_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.record_id) -Expected ([string]$run1.result.proof_verification.record_id) -Message "anchor_record record_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.event_id) -Expected ([string]$run1.result.proof_verification.event_id) -Message "anchor_record event_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.receipt_id) -Expected ([string]$run1.result.proof_verification.receipt_id) -Message "anchor_record receipt_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.request_id) -Expected ([string]$run1.result.proof_verification.request_id) -Message "anchor_record request_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.idempotency_key) -Expected ([string]$run1.result.proof_verification.idempotency_key) -Message "anchor_record idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$anchor.campaign_id) -Expected ([string]$run1.result.proof_verification.campaign_id) -Message "anchor_record campaign_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.channel) -Expected ([string]$run1.result.proof_verification.channel) -Message "anchor_record channel mismatch."
+      Assert-Equal -Actual ([string]$anchor.language_code) -Expected ([string]$run1.result.proof_verification.language_code) -Message "anchor_record language_code mismatch."
+      Assert-Equal -Actual ([string]$anchor.selected_variant_id) -Expected ([string]$run1.result.proof_verification.selected_variant_id) -Message "anchor_record selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$anchor.provider_mode) -Expected "mock" -Message "anchor_record provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$anchor.dry_run) -Expected $true -Message "anchor_record dry_run mismatch."
+      Assert-Equal -Actual ([string]$anchor.status) -Expected "simulated" -Message "anchor_record status mismatch."
+
+      $acceptedActionTypes = @($anchor.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "anchor_record accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "anchor_record accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "anchor_record accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($anchor.reason_codes) -Value "anchor_record_emitted" -Message "anchor_record should include emission reason code."
+      Assert-Contains -Collection @($anchor.reason_codes) -Value "dispatch_receipt_dry_run" -Message "anchor_record should include dry-run receipt lineage."
+      Assert-Contains -Collection @($anchor.reason_codes) -Value "template_lang_native" -Message "anchor_record should include template lineage."
+      Assert-Contains -Collection @($anchor.reason_codes) -Value "variant_lang_perf_win" -Message "anchor_record should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($anchor.PSObject.Properties.Name -contains $forbidden)) -Message "anchor_record must not expose $forbidden."
+      }
+
+      $anchorJson1 = ($run1.result.anchor_record | ConvertTo-Json -Depth 40 -Compress)
+      $anchorJson2 = ($run2.result.anchor_record | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $anchorJson1 -Expected $anchorJson2 -Message "anchor_record must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.anchor_record.idempotency_key) -Expected ([string]$run2.result.anchor_record.idempotency_key) -Message "anchor_record idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit anchor_record for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.anchor_record) -Message "Malformed lead payload must not emit anchor_record."
     }
   }
 }
