@@ -274,7 +274,8 @@ Describe "revenue automation scaffold smoke" {
         "evidence_envelope",
         "retention_manifest",
         "immutability_receipt",
-        "ledger_attestation"
+        "ledger_attestation",
+        "proof_verification"
       )
 
       foreach ($field in $requiredFields) {
@@ -2337,6 +2338,133 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.ledger_attestation) -Message "Malformed lead payload must not emit ledger_attestation."
+    }
+  }
+
+  Context "24) deterministic proof verification contract" {
+    It "emits deterministic proof_verification with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv022-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 998; conversion_bps = 355; impressions = 775 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv022-001"; segment = "saas"; pain_match = $true; budget = 4000; engagement_score = 98 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Proof verification run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Proof verification run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.proof_verification) -Message "Successful lead_enrich should emit proof_verification."
+
+      $verification = $run1.result.proof_verification
+      $requiredVerificationFields = @(
+        "verification_id",
+        "attestation_id",
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredVerificationFields) {
+        Assert-True -Condition ($verification.PSObject.Properties.Name -contains $field) -Message "proof_verification missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$verification.attestation_id) -Expected ([string]$run1.result.ledger_attestation.attestation_id) -Message "proof_verification attestation_id mismatch."
+      Assert-Equal -Actual ([string]$verification.immutability_id) -Expected ([string]$run1.result.ledger_attestation.immutability_id) -Message "proof_verification immutability_id mismatch."
+      Assert-Equal -Actual ([string]$verification.manifest_id) -Expected ([string]$run1.result.ledger_attestation.manifest_id) -Message "proof_verification manifest_id mismatch."
+      Assert-Equal -Actual ([string]$verification.envelope_id) -Expected ([string]$run1.result.ledger_attestation.envelope_id) -Message "proof_verification envelope_id mismatch."
+      Assert-Equal -Actual ([string]$verification.record_id) -Expected ([string]$run1.result.ledger_attestation.record_id) -Message "proof_verification record_id mismatch."
+      Assert-Equal -Actual ([string]$verification.event_id) -Expected ([string]$run1.result.ledger_attestation.event_id) -Message "proof_verification event_id mismatch."
+      Assert-Equal -Actual ([string]$verification.receipt_id) -Expected ([string]$run1.result.ledger_attestation.receipt_id) -Message "proof_verification receipt_id mismatch."
+      Assert-Equal -Actual ([string]$verification.request_id) -Expected ([string]$run1.result.ledger_attestation.request_id) -Message "proof_verification request_id mismatch."
+      Assert-Equal -Actual ([string]$verification.idempotency_key) -Expected ([string]$run1.result.ledger_attestation.idempotency_key) -Message "proof_verification idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$verification.campaign_id) -Expected ([string]$run1.result.ledger_attestation.campaign_id) -Message "proof_verification campaign_id mismatch."
+      Assert-Equal -Actual ([string]$verification.channel) -Expected ([string]$run1.result.ledger_attestation.channel) -Message "proof_verification channel mismatch."
+      Assert-Equal -Actual ([string]$verification.language_code) -Expected ([string]$run1.result.ledger_attestation.language_code) -Message "proof_verification language_code mismatch."
+      Assert-Equal -Actual ([string]$verification.selected_variant_id) -Expected ([string]$run1.result.ledger_attestation.selected_variant_id) -Message "proof_verification selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$verification.provider_mode) -Expected "mock" -Message "proof_verification provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$verification.dry_run) -Expected $true -Message "proof_verification dry_run mismatch."
+      Assert-Equal -Actual ([string]$verification.status) -Expected "simulated" -Message "proof_verification status mismatch."
+
+      $acceptedActionTypes = @($verification.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "proof_verification accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "proof_verification accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "proof_verification accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($verification.reason_codes) -Value "proof_verification_emitted" -Message "proof_verification should include emission reason code."
+      Assert-Contains -Collection @($verification.reason_codes) -Value "dispatch_receipt_dry_run" -Message "proof_verification should include dry-run receipt lineage."
+      Assert-Contains -Collection @($verification.reason_codes) -Value "template_lang_native" -Message "proof_verification should include template lineage."
+      Assert-Contains -Collection @($verification.reason_codes) -Value "variant_lang_perf_win" -Message "proof_verification should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($verification.PSObject.Properties.Name -contains $forbidden)) -Message "proof_verification must not expose $forbidden."
+      }
+
+      $verificationJson1 = ($run1.result.proof_verification | ConvertTo-Json -Depth 40 -Compress)
+      $verificationJson2 = ($run2.result.proof_verification | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $verificationJson1 -Expected $verificationJson2 -Message "proof_verification must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.proof_verification.idempotency_key) -Expected ([string]$run2.result.proof_verification.idempotency_key) -Message "proof_verification idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit proof_verification for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.proof_verification) -Message "Malformed lead payload must not emit proof_verification."
     }
   }
 }
