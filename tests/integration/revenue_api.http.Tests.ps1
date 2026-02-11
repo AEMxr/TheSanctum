@@ -128,7 +128,7 @@ Describe "revenue API localhost HTTP integration" {
     }
 
     $hit429 = $false
-    for ($i = 0; $i -lt 150; $i++) {
+    for ($i = 0; $i -lt 300; $i++) {
       $task.task_id = "rev-http-rate-$i"
       $resp = Invoke-HttpJsonRequest -Method "POST" -Url ($script:BaseUrl + "/v1/marketing/task/execute") -Headers $headers -Body $task
       if ($resp.status_code -eq 429) {

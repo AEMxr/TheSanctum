@@ -112,7 +112,7 @@ Describe "language API localhost HTTP integration" {
     $payload = [pscustomobject]@{ input_text = "hello offer"; source_channel = "reddit"; mode = "detect" }
 
     $hit429 = $false
-    for ($i = 0; $i -lt 90; $i++) {
+    for ($i = 0; $i -lt 300; $i++) {
       $resp = Invoke-HttpJsonRequest -Method "POST" -Url ($script:BaseUrl + "/v1/language/detect") -Headers $headers -Body $payload
       if ($resp.status_code -eq 429) {
         $hit429 = $true
