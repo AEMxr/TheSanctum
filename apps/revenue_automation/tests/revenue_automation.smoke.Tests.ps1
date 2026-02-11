@@ -272,7 +272,8 @@ Describe "revenue automation scaffold smoke" {
         "dispatch_receipt",
         "audit_record",
         "evidence_envelope",
-        "retention_manifest"
+        "retention_manifest",
+        "immutability_receipt"
       )
 
       foreach ($field in $requiredFields) {
@@ -2087,6 +2088,129 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.retention_manifest) -Message "Malformed lead payload must not emit retention_manifest."
+    }
+  }
+
+  Context "22) deterministic immutability receipt contract" {
+    It "emits deterministic immutability_receipt with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv020-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 990; conversion_bps = 340; impressions = 760 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv020-001"; segment = "saas"; pain_match = $true; budget = 3800; engagement_score = 96 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Immutability receipt run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Immutability receipt run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.immutability_receipt) -Message "Successful lead_enrich should emit immutability_receipt."
+
+      $receipt = $run1.result.immutability_receipt
+      $requiredReceiptFields = @(
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredReceiptFields) {
+        Assert-True -Condition ($receipt.PSObject.Properties.Name -contains $field) -Message "immutability_receipt missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$receipt.manifest_id) -Expected ([string]$run1.result.retention_manifest.manifest_id) -Message "immutability_receipt manifest_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.envelope_id) -Expected ([string]$run1.result.retention_manifest.envelope_id) -Message "immutability_receipt envelope_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.record_id) -Expected ([string]$run1.result.retention_manifest.record_id) -Message "immutability_receipt record_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.event_id) -Expected ([string]$run1.result.retention_manifest.event_id) -Message "immutability_receipt event_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.receipt_id) -Expected ([string]$run1.result.retention_manifest.receipt_id) -Message "immutability_receipt receipt_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.request_id) -Expected ([string]$run1.result.retention_manifest.request_id) -Message "immutability_receipt request_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.idempotency_key) -Expected ([string]$run1.result.retention_manifest.idempotency_key) -Message "immutability_receipt idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$receipt.campaign_id) -Expected ([string]$run1.result.retention_manifest.campaign_id) -Message "immutability_receipt campaign_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.channel) -Expected ([string]$run1.result.retention_manifest.channel) -Message "immutability_receipt channel mismatch."
+      Assert-Equal -Actual ([string]$receipt.language_code) -Expected ([string]$run1.result.retention_manifest.language_code) -Message "immutability_receipt language_code mismatch."
+      Assert-Equal -Actual ([string]$receipt.selected_variant_id) -Expected ([string]$run1.result.retention_manifest.selected_variant_id) -Message "immutability_receipt selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.provider_mode) -Expected "mock" -Message "immutability_receipt provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$receipt.dry_run) -Expected $true -Message "immutability_receipt dry_run mismatch."
+      Assert-Equal -Actual ([string]$receipt.status) -Expected "simulated" -Message "immutability_receipt status mismatch."
+
+      $acceptedActionTypes = @($receipt.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "immutability_receipt accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "immutability_receipt accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "immutability_receipt accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "immutability_receipt_emitted" -Message "immutability_receipt should include emission reason code."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "dispatch_receipt_dry_run" -Message "immutability_receipt should include dry-run receipt lineage."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "template_lang_native" -Message "immutability_receipt should include template lineage."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "variant_lang_perf_win" -Message "immutability_receipt should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($receipt.PSObject.Properties.Name -contains $forbidden)) -Message "immutability_receipt must not expose $forbidden."
+      }
+
+      $receiptJson1 = ($run1.result.immutability_receipt | ConvertTo-Json -Depth 40 -Compress)
+      $receiptJson2 = ($run2.result.immutability_receipt | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $receiptJson1 -Expected $receiptJson2 -Message "immutability_receipt must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.immutability_receipt.idempotency_key) -Expected ([string]$run2.result.immutability_receipt.idempotency_key) -Message "immutability_receipt idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit immutability_receipt for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.immutability_receipt) -Message "Malformed lead payload must not emit immutability_receipt."
     }
   }
 }
