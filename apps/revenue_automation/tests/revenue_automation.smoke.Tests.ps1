@@ -262,7 +262,8 @@ Describe "revenue automation scaffold smoke" {
         "policy",
         "offer",
         "proposal",
-        "telemetry_event_stub"
+        "telemetry_event_stub",
+        "telemetry_event"
       )
 
       foreach ($field in $requiredFields) {
@@ -975,33 +976,48 @@ Describe "revenue automation scaffold smoke" {
         created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
       }
 
-      $run = Invoke-RevenueRun -Config $config -Task $task
-      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Contract success run should exit 0."
-      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Contract success run should return SUCCESS."
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Contract success run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Contract success run should return SUCCESS."
 
-      Assert-True -Condition ($null -ne $run.result.proposal) -Message "Successful lead_enrich should emit proposal."
-      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.ad_copy)) -Message "Proposal should include ad_copy."
-      Assert-True -Condition (@($run.result.proposal.short_reply_templates).Count -gt 0) -Message "Proposal should include short_reply_templates."
-      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.cta_buy_text)) -Message "Proposal should include cta_buy_text."
-      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.proposal.cta_subscribe_text)) -Message "Proposal should include cta_subscribe_text."
+      Assert-True -Condition ($null -ne $run1.result.proposal) -Message "Successful lead_enrich should emit proposal."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.ad_copy)) -Message "Proposal should include ad_copy."
+      Assert-True -Condition (@($run1.result.proposal.short_reply_templates).Count -gt 0) -Message "Proposal should include short_reply_templates."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.cta_buy_text)) -Message "Proposal should include cta_buy_text."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.proposal.cta_subscribe_text)) -Message "Proposal should include cta_subscribe_text."
 
-      Assert-True -Condition ($null -ne $run.result.route) -Message "Successful lead_enrich should emit route."
-      Assert-True -Condition ($null -ne $run.result.route.variant) -Message "Successful lead_enrich should emit route.variant."
-      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run.result.route.variant.selected_variant_id)) -Message "Variant should include selected_variant_id."
-      Assert-True -Condition (@($run.result.route.variant.selection_reason_codes).Count -gt 0) -Message "Variant should include selection_reason_codes."
+      Assert-True -Condition ($null -ne $run1.result.route) -Message "Successful lead_enrich should emit route."
+      Assert-True -Condition ($null -ne $run1.result.route.variant) -Message "Successful lead_enrich should emit route.variant."
+      Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$run1.result.route.variant.selected_variant_id)) -Message "Variant should include selected_variant_id."
+      Assert-True -Condition (@($run1.result.route.variant.selection_reason_codes).Count -gt 0) -Message "Variant should include selection_reason_codes."
 
-      Assert-Contains -Collection @($run.result.reason_codes) -Value "template_lang_native" -Message "Result reason_codes should include template lineage."
-      Assert-Contains -Collection @($run.result.reason_codes) -Value "variant_lang_perf_win" -Message "Result reason_codes should include variant lineage."
+      Assert-Contains -Collection @($run1.result.reason_codes) -Value "template_lang_native" -Message "Result reason_codes should include template lineage."
+      Assert-Contains -Collection @($run1.result.reason_codes) -Value "variant_lang_perf_win" -Message "Result reason_codes should include variant lineage."
 
-      Assert-True -Condition ($null -ne $run.result.telemetry_event_stub) -Message "Result should include telemetry_event_stub."
-      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.language_code) -Expected "es" -Message "Telemetry stub language_code mismatch."
-      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.region_code) -Expected "MX" -Message "Telemetry stub region_code mismatch."
-      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.geo_coarse) -Expected "mx-north" -Message "Telemetry stub geo_coarse mismatch."
-      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.source_channel) -Expected "reddit" -Message "Telemetry stub source_channel mismatch."
-      Assert-Equal -Actual ([string]$run.result.telemetry_event_stub.selected_variant_id) -Expected ([string]$run.result.route.variant.selected_variant_id) -Message "Telemetry stub selected_variant_id mismatch."
+      Assert-True -Condition ($null -ne $run1.result.telemetry_event_stub) -Message "Result should include telemetry_event_stub."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.language_code) -Expected "es" -Message "Telemetry stub language_code mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.region_code) -Expected "MX" -Message "Telemetry stub region_code mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.geo_coarse) -Expected "mx-north" -Message "Telemetry stub geo_coarse mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.source_channel) -Expected "reddit" -Message "Telemetry stub source_channel mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event_stub.selected_variant_id) -Expected ([string]$run1.result.route.variant.selected_variant_id) -Message "Telemetry stub selected_variant_id mismatch."
 
-      Assert-True -Condition (-not ($run.result.telemetry_event_stub.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry stub must not expose latitude."
-      Assert-True -Condition (-not ($run.result.telemetry_event_stub.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry stub must not expose longitude."
+      Assert-True -Condition ($null -ne $run1.result.telemetry_event) -Message "Result should include telemetry_event on successful lead_enrich."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.language_code) -Expected "es" -Message "Telemetry event language_code mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.region_code) -Expected "MX" -Message "Telemetry event region_code mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.geo_coarse) -Expected "mx-north" -Message "Telemetry event geo_coarse mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.source_channel) -Expected "reddit" -Message "Telemetry event source_channel mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.campaign_id) -Expected "camp-001" -Message "Telemetry event campaign_id mismatch."
+      Assert-Equal -Actual ([string]$run1.result.telemetry_event.selected_variant_id) -Expected ([string]$run1.result.route.variant.selected_variant_id) -Message "Telemetry event selected_variant_id mismatch."
+      Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "template_lang_native" -Message "Telemetry event should carry template reason lineage."
+      Assert-Contains -Collection @($run1.result.telemetry_event.reason_codes) -Value "variant_lang_perf_win" -Message "Telemetry event should carry variant reason lineage."
+
+      Assert-True -Condition (-not ($run1.result.telemetry_event_stub.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry stub must not expose latitude."
+      Assert-True -Condition (-not ($run1.result.telemetry_event_stub.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry stub must not expose longitude."
+      Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains "latitude")) -Message "Telemetry event must not expose latitude."
+      Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry event must not expose longitude."
+
+      Assert-Equal -Actual (($run1.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Expected (($run2.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Message "Telemetry event must remain deterministic across repeated runs."
     }
   }
 }
