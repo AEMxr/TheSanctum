@@ -101,6 +101,10 @@ paths:
                 mode: { type: string, enum: [detect, detect_and_convert, convert] }
                 source_language: { type: string }
                 target_language: { type: string }
+            example:
+              input_text: "hola gracias oferta cliente"
+              source_channel: "reddit"
+              mode: "detect"
       responses:
         '200':
           description: Detection response
@@ -108,30 +112,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LanguageEnvelope'
+              example:
+                request_id: "req_lang_001"
+                schema_version: "language-api-http-v1"
+                provider_used: "local"
+                result:
+                  input_text: "hola gracias oferta cliente"
+                  source_channel: "reddit"
+                  mode: "detect"
+                  source_language: "es"
+                  target_language: ""
+                  detected_language: "es"
+                  confidence_band: "high"
+                  converted_text: null
+                  conversion_applied: false
+                  reason_codes: ["lang_detect_high_conf"]
         '400':
           description: Invalid payload
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/400"
+                title: "Bad Request"
+                status: 400
+                detail: "input_text is required."
+                instance: "POST /v1/language/detect"
+                request_id: "req_lang_400"
         '401':
           description: Missing/invalid API key
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/401"
+                title: "Unauthorized"
+                status: 401
+                detail: "Missing or invalid X-API-Key."
+                instance: "POST /v1/language/detect"
+                request_id: "req_lang_401"
         '409':
           description: Idempotency key conflict
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/409"
+                title: "Conflict"
+                status: 409
+                detail: "Idempotency-Key was reused with a different request body."
+                instance: "POST /v1/language/detect"
+                request_id: "req_lang_409"
         '429':
           description: Rate limited
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/429"
+                title: "Too Many Requests"
+                status: 429
+                detail: "Rate limit exceeded for this API key and endpoint window."
+                instance: "POST /v1/language/detect"
+                request_id: "req_lang_429"
   /v1/language/translate:
     post:
       summary: Translate language deterministically
@@ -150,6 +197,12 @@ paths:
                 source_language: { type: string }
                 target_language: { type: string }
                 mode: { type: string, enum: [convert, detect_and_convert] }
+            example:
+              input_text: "hola gracias oferta cliente"
+              source_channel: "reddit"
+              source_language: "es"
+              target_language: "en"
+              mode: "convert"
       responses:
         '200':
           description: Translation response
@@ -157,6 +210,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LanguageEnvelope'
+              example:
+                request_id: "req_lang_002"
+                schema_version: "language-api-http-v1"
+                provider_used: "local"
+                result:
+                  input_text: "hola gracias oferta cliente"
+                  source_channel: "reddit"
+                  mode: "convert"
+                  source_language: "es"
+                  target_language: "en"
+                  detected_language: "es"
+                  confidence_band: "high"
+                  converted_text: "hello thanks offer client"
+                  conversion_applied: true
+                  reason_codes: ["lang_detect_high_conf", "lang_convert_fallback"]
         '400':
           description: Invalid payload
           content:

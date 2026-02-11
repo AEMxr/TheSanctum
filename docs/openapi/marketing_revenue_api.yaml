@@ -89,6 +89,19 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/TaskEnvelope'
+            example:
+              task_id: "task-http-001"
+              task_type: "lead_enrich"
+              payload:
+                source_channel: "reddit"
+                campaign_id: "camp-http-001"
+                language_code: "en"
+                leads:
+                  - lead_id: "lead-http-001"
+                    segment: "saas"
+                    budget: 1000
+                    engagement_score: 80
+              created_at_utc: "2026-01-01T00:00:00Z"
       responses:
         '200':
           description: Execution result envelope
@@ -96,30 +109,67 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskResultEnvelope'
+              example:
+                request_id: "req_rev_001"
+                schema_version: "marketing-revenue-api-http-v1"
+                provider_used: "mock"
+                result:
+                  task_id: "task-http-001"
+                  status: "SUCCESS"
+                  provider_used: "mock"
+                  reason_codes: ["route_priority_outreach", "offer_pro_priority", "proposal_from_offer_pro"]
         '400':
           description: Invalid payload
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/400"
+                title: "Bad Request"
+                status: 400
+                detail: "task_id is required and must be a non-empty string."
+                instance: "POST /v1/marketing/task/execute"
+                request_id: "req_rev_400"
         '401':
           description: Missing/invalid API key
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/401"
+                title: "Unauthorized"
+                status: 401
+                detail: "Missing or invalid X-API-Key."
+                instance: "POST /v1/marketing/task/execute"
+                request_id: "req_rev_401"
         '409':
           description: Idempotency key conflict
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/409"
+                title: "Conflict"
+                status: 409
+                detail: "Idempotency-Key was reused with a different request body."
+                instance: "POST /v1/marketing/task/execute"
+                request_id: "req_rev_409"
         '429':
           description: Rate limited
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+              example:
+                type: "https://httpstatuses.com/429"
+                title: "Too Many Requests"
+                status: 429
+                detail: "Rate limit exceeded for this API key and endpoint window."
+                instance: "POST /v1/marketing/task/execute"
+                request_id: "req_rev_429"
   /v1/revenue/task/execute:
     post:
       summary: Execute revenue task (alias)
@@ -131,6 +181,12 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/TaskEnvelope'
+            example:
+              task_id: "task-http-002"
+              task_type: "followup_draft"
+              payload:
+                lead_id: "lead-http-002"
+              created_at_utc: "2026-01-01T00:00:00Z"
       responses:
         '200':
           description: Execution result envelope
