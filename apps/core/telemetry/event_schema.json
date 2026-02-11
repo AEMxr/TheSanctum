@@ -1,0 +1,56 @@
+{
+  "schema_name": "trend_event",
+  "schema_version": "v1",
+  "required_fields": [
+    "event_id",
+    "event_type",
+    "timestamp_utc",
+    "campaign_id",
+    "channel",
+    "offer_tier",
+    "language_code",
+    "region_code",
+    "geo_coarse",
+    "reason_codes"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "timestamp_utc": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string"
+    },
+    "offer_tier": {
+      "type": "string"
+    },
+    "language_code": {
+      "type": "string"
+    },
+    "region_code": {
+      "type": "string"
+    },
+    "geo_coarse": {
+      "type": "string",
+      "description": "Coarse location only (city/region/country), never precise address."
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "privacy_notes": [
+    "No precise geo coordinates.",
+    "No personal identity expansion in trend telemetry."
+  ]
+}
