@@ -185,6 +185,7 @@ $result = [pscustomobject]@{
   delivery_manifest = if ($routeResult.PSObject.Properties.Name -contains "delivery_manifest") { $routeResult.delivery_manifest } else { $null }
   sender_envelope = if ($routeResult.PSObject.Properties.Name -contains "sender_envelope") { $routeResult.sender_envelope } else { $null }
   adapter_request = if ($routeResult.PSObject.Properties.Name -contains "adapter_request") { $routeResult.adapter_request } else { $null }
+  dispatch_receipt = if ($routeResult.PSObject.Properties.Name -contains "dispatch_receipt") { $routeResult.dispatch_receipt } else { $null }
 }
 
 if ($config.emit_telemetry) {

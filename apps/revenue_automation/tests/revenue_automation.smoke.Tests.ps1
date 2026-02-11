@@ -268,7 +268,8 @@ Describe "revenue automation scaffold smoke" {
         "dispatch_plan",
         "delivery_manifest",
         "sender_envelope",
-        "adapter_request"
+        "adapter_request",
+        "dispatch_receipt"
       )
 
       foreach ($field in $requiredFields) {
@@ -1541,6 +1542,129 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.adapter_request) -Message "Malformed lead payload must not emit adapter_request."
+    }
+  }
+
+  Context "18) deterministic dispatch receipt contract" {
+    It "emits deterministic dispatch_receipt with ordered accepted_actions, lineage, privacy, and dry-run status" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv015-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 950; conversion_bps = 300; impressions = 720 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv015-001"; segment = "saas"; pain_match = $true; budget = 3000; engagement_score = 88 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Dispatch receipt run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Dispatch receipt run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.dispatch_receipt) -Message "Successful lead_enrich should emit dispatch_receipt."
+
+      $receipt = $run1.result.dispatch_receipt
+      $requiredReceiptFields = @(
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "envelope_id",
+        "delivery_id",
+        "dispatch_id",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_actions",
+        "reason_codes"
+      )
+      foreach ($field in $requiredReceiptFields) {
+        Assert-True -Condition ($receipt.PSObject.Properties.Name -contains $field) -Message "dispatch_receipt missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$receipt.request_id) -Expected ([string]$run1.result.adapter_request.request_id) -Message "dispatch_receipt request_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.idempotency_key) -Expected ([string]$run1.result.adapter_request.idempotency_key) -Message "dispatch_receipt idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$receipt.envelope_id) -Expected ([string]$run1.result.adapter_request.envelope_id) -Message "dispatch_receipt envelope_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.delivery_id) -Expected ([string]$run1.result.adapter_request.delivery_id) -Message "dispatch_receipt delivery_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.dispatch_id) -Expected ([string]$run1.result.adapter_request.dispatch_id) -Message "dispatch_receipt dispatch_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.campaign_id) -Expected ([string]$run1.result.adapter_request.campaign_id) -Message "dispatch_receipt campaign_id mismatch."
+      Assert-Equal -Actual ([string]$receipt.channel) -Expected ([string]$run1.result.adapter_request.channel) -Message "dispatch_receipt channel mismatch."
+      Assert-Equal -Actual ([string]$receipt.language_code) -Expected ([string]$run1.result.adapter_request.language_code) -Message "dispatch_receipt language_code mismatch."
+      Assert-Equal -Actual ([string]$receipt.selected_variant_id) -Expected ([string]$run1.result.adapter_request.selected_variant_id) -Message "dispatch_receipt variant mismatch."
+      Assert-Equal -Actual ([string]$receipt.provider_mode) -Expected "mock" -Message "dispatch_receipt provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$receipt.dry_run) -Expected $true -Message "dispatch_receipt dry_run mismatch."
+      Assert-Equal -Actual ([string]$receipt.status) -Expected "simulated" -Message "dispatch_receipt status mismatch for dry-run path."
+
+      $accepted = @($receipt.accepted_actions)
+      Assert-Equal -Actual $accepted.Count -Expected 2 -Message "dispatch_receipt accepted_actions should contain exactly two entries."
+      Assert-Equal -Actual ([string]$accepted[0].action_type) -Expected "cta_buy" -Message "dispatch_receipt action ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$accepted[1].action_type) -Expected "cta_subscribe" -Message "dispatch_receipt action ordering mismatch for cta_subscribe."
+      Assert-Equal -Actual ([string]$accepted[0].action_stub) -Expected ([string]$run1.result.adapter_request.scheduled_actions[0].action_stub) -Message "dispatch_receipt cta_buy action_stub mismatch."
+      Assert-Equal -Actual ([string]$accepted[1].action_stub) -Expected ([string]$run1.result.adapter_request.scheduled_actions[1].action_stub) -Message "dispatch_receipt cta_subscribe action_stub mismatch."
+      Assert-Equal -Actual ([string]$accepted[0].ad_copy) -Expected ([string]$run1.result.adapter_request.scheduled_actions[0].ad_copy) -Message "dispatch_receipt cta_buy ad_copy mismatch."
+      Assert-Equal -Actual ([string]$accepted[0].reply_template) -Expected ([string]$run1.result.adapter_request.scheduled_actions[0].reply_template) -Message "dispatch_receipt cta_buy reply_template mismatch."
+
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "dispatch_receipt_emitted" -Message "dispatch_receipt should include emission reason code."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "dispatch_receipt_dry_run" -Message "dispatch_receipt should include dry-run reason code."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "template_lang_native" -Message "dispatch_receipt should include template lineage."
+      Assert-Contains -Collection @($receipt.reason_codes) -Value "variant_lang_perf_win" -Message "dispatch_receipt should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($receipt.PSObject.Properties.Name -contains $forbidden)) -Message "dispatch_receipt must not expose $forbidden."
+      }
+
+      $receiptJson1 = ($run1.result.dispatch_receipt | ConvertTo-Json -Depth 40 -Compress)
+      $receiptJson2 = ($run2.result.dispatch_receipt | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $receiptJson1 -Expected $receiptJson2 -Message "dispatch_receipt must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.dispatch_receipt.idempotency_key) -Expected ([string]$run2.result.dispatch_receipt.idempotency_key) -Message "dispatch_receipt idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit dispatch_receipt for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.dispatch_receipt) -Message "Malformed lead payload must not emit dispatch_receipt."
     }
   }
 }
