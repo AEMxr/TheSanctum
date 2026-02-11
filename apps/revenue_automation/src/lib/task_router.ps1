@@ -974,6 +974,7 @@ function Invoke-RevenueTaskRoute {
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Select-Object -Unique
     )
+    # Variant selection is deterministic and language-aware; tie-break behavior is enforced in variant_selector.ps1.
     $variant = Get-LanguageAwareVariantSelection -Task $Task
     $variantReasonCodes = @($variant.selection_reason_codes | ForEach-Object { [string]$_ })
 

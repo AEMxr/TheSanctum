@@ -140,6 +140,7 @@ function Get-LanguageAwareVariantSelection {
     }
   }
 
+  # Stable sort order is part of the contract: higher score wins, ties break by variant_id ascending.
   $ordered = @(
     @($candidates.ToArray()) |
       Sort-Object -Property @{ Expression = { -[int]$_.score } }, @{ Expression = { [string]$_.variant_id } }

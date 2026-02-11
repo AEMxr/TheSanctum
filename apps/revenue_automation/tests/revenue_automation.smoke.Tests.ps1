@@ -919,6 +919,7 @@ Describe "revenue automation scaffold smoke" {
       $run = Invoke-RevenueRun -Config $config -Task $task
       Assert-Equal -Actual ([string]$run.result.route.variant.selected_variant_id) -Expected "variant_fr_alpha" -Message "Tie-break should use variant_id ascending."
       Assert-Contains -Collection @($run.result.route.variant.selection_reason_codes) -Value "variant_lang_tiebreak" -Message "Tie-break reason code should be emitted."
+      Assert-Equal -Actual ([string]$run.result.route.variant.confidence_band) -Expected "medium" -Message "Tie-break path should emit medium confidence for equal positive scores."
     }
 
     It "emits fallback variant for missing trend summary without crashing" {
@@ -946,6 +947,7 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Missing trend summary should preserve successful path."
       Assert-Equal -Actual ([string]$run.result.route.variant.selected_variant_id) -Expected "variant_de_core" -Message "Missing trend summary should use deterministic language fallback variant."
       Assert-Contains -Collection @($run.result.route.variant.selection_reason_codes) -Value "variant_lang_tiebreak" -Message "Fallback variant should emit stable reason code."
+      Assert-Equal -Actual ([string]$run.result.route.variant.confidence_band) -Expected "low" -Message "Fallback variant should emit low confidence when no trend candidates match."
     }
   }
 

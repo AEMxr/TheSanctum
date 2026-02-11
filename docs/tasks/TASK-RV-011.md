@@ -23,7 +23,7 @@ Select offer/ad variant deterministically by language-market performance bands, 
 - [ ] Deterministic tie-break rules documented and tested.
 - [ ] Tests verify different language segments can choose different variants.
 - [ ] Scope validator PASS.
-- [ ] 4-suite gate PASS.
+- [ ] 5-suite gate PASS.
 - [ ] Exactly one commit.
 
 ## Deliverables (SHA, diff summary)
