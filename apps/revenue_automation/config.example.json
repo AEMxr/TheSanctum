@@ -3,5 +3,25 @@
   "provider_mode": "mock",
   "emit_telemetry": true,
   "safe_mode": true,
-  "dry_run": true
+  "dry_run": true,
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8082,
+    "schema_version": "marketing-revenue-api-http-v1",
+    "max_request_bytes": 131072,
+    "request_timeout_ms": 20000,
+    "idempotency_ttl_seconds": 300,
+    "rate_limit": {
+      "max_requests": 120,
+      "window_seconds": 60
+    },
+    "api_keys": [
+      {
+        "key_id": "dev-local",
+        "key": "dev-local-key",
+        "role": "admin"
+      }
+    ],
+    "usage_ledger_path": "apps/revenue_automation/artifacts/usage/revenue_api_usage.jsonl"
+  }
 }
