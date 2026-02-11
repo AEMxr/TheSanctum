@@ -147,4 +147,26 @@ Describe "language detection API contract" {
       Assert-Equal -Actual ($a | ConvertTo-Json -Depth 20 -Compress) -Expected ($b | ConvertTo-Json -Depth 20 -Compress) -Message "Repeated convert input output mismatch."
     }
   }
+
+  Context "runtime health contract" {
+    It "returns deterministic health payload shape with readiness keys" {
+      $health = Get-LanguageApiHealthPayload
+      Assert-Equal -Actual ([string]$health.service) -Expected "language_api" -Message "Health payload service mismatch."
+      Assert-Equal -Actual ([string]$health.status) -Expected "ok" -Message "Health payload status mismatch."
+      Assert-Equal -Actual ([bool]$health.ready) -Expected $true -Message "Health payload readiness mismatch."
+      Assert-Equal -Actual ([string]$health.mode_default) -Expected "detect" -Message "Health payload default mode mismatch."
+
+      $modes = @($health.supported_modes | ForEach-Object { [string]$_ })
+      Assert-Contains -Collection $modes -Value "detect" -Message "Health payload supported_modes missing detect."
+      Assert-Contains -Collection $modes -Value "convert" -Message "Health payload supported_modes missing convert."
+      Assert-Contains -Collection $modes -Value "detect_and_convert" -Message "Health payload supported_modes missing detect_and_convert."
+
+      $langs = @($health.supported_languages | ForEach-Object { [string]$_ })
+      Assert-Contains -Collection $langs -Value "de" -Message "Health payload supported_languages missing de."
+      Assert-Contains -Collection $langs -Value "en" -Message "Health payload supported_languages missing en."
+      Assert-Contains -Collection $langs -Value "es" -Message "Health payload supported_languages missing es."
+      Assert-Contains -Collection $langs -Value "fr" -Message "Health payload supported_languages missing fr."
+      Assert-Contains -Collection $langs -Value "pt" -Message "Health payload supported_languages missing pt."
+    }
+  }
 }

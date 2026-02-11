@@ -1,7 +1,8 @@
 param(
   [string]$ConfigPath = "",
   [string]$TaskPath = "",
-  [string]$OutputPath = ""
+  [string]$OutputPath = "",
+  [switch]$Health
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,6 +71,18 @@ function Normalize-Config {
   }
 }
 
+function Get-RevenueAutomationHealthPayload {
+  return [pscustomobject]@{
+    service = "revenue_automation"
+    status = "ok"
+    ready = $true
+    provider_mode_default = "mock"
+    supported_provider_modes = @("http", "mock")
+    supports_safe_mode = $true
+    supports_dry_run = $true
+  }
+}
+
 function Get-TaskValidationErrors {
   param([Parameter(Mandatory = $true)][object]$Task)
 
@@ -106,6 +119,22 @@ function Get-TaskValidationErrors {
   }
 
   return @($errors.ToArray())
+}
+
+if ($Health) {
+  $healthPayload = Get-RevenueAutomationHealthPayload
+  $healthJson = $healthPayload | ConvertTo-Json -Depth 20
+  if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+    $outDir = Split-Path -Parent $OutputPath
+    if (-not [string]::IsNullOrWhiteSpace($outDir) -and -not (Test-Path -Path $outDir -PathType Container)) {
+      New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+    }
+    Set-Content -Path $OutputPath -Value $healthJson -Encoding UTF8
+  }
+  else {
+    Write-Output $healthJson
+  }
+  exit 0
 }
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {

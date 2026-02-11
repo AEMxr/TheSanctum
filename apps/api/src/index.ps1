@@ -5,7 +5,8 @@
   [string]$OutFile = "",
   [string]$Mode = "detect",
   [string]$SourceLanguage = "",
-  [string]$TargetLanguage = ""
+  [string]$TargetLanguage = "",
+  [switch]$Health
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,17 @@ function Get-LanguageConceptMap {
 
 function Get-SupportedLanguageCodes {
   return @("de", "en", "es", "fr", "pt")
+}
+
+function Get-LanguageApiHealthPayload {
+  return [pscustomobject]@{
+    service = "language_api"
+    status = "ok"
+    ready = $true
+    mode_default = "detect"
+    supported_modes = @("detect", "convert", "detect_and_convert")
+    supported_languages = @(Get-SupportedLanguageCodes | Sort-Object)
+  }
 }
 
 function Normalize-LanguageCode {
@@ -384,6 +396,18 @@ function Invoke-LanguageApi {
 
 $isDotSourced = $MyInvocation.InvocationName -eq "."
 if (-not $isDotSourced) {
+  if ($Health) {
+    $healthPayload = Get-LanguageApiHealthPayload
+    $healthJson = $healthPayload | ConvertTo-Json -Depth 20
+    if ([string]::IsNullOrWhiteSpace($OutFile)) {
+      Write-Output $healthJson
+    }
+    else {
+      $healthJson | Set-Content -Path $OutFile -Encoding UTF8
+    }
+    exit 0
+  }
+
   $input = Get-LanguageDetectionInput `
     -JsonPath $InputJsonPath `
     -FallbackText $InputText `
