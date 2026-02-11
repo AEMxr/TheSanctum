@@ -194,6 +194,7 @@ $result = [pscustomobject]@{
   ledger_attestation = if ($routeResult.PSObject.Properties.Name -contains "ledger_attestation") { $routeResult.ledger_attestation } else { $null }
   proof_verification = if ($routeResult.PSObject.Properties.Name -contains "proof_verification") { $routeResult.proof_verification } else { $null }
   anchor_record = if ($routeResult.PSObject.Properties.Name -contains "anchor_record") { $routeResult.anchor_record } else { $null }
+  index_receipt = if ($routeResult.PSObject.Properties.Name -contains "index_receipt") { $routeResult.index_receipt } else { $null }
 }
 
 if ($config.emit_telemetry) {
