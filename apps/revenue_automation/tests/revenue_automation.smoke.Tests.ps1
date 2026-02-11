@@ -271,7 +271,8 @@ Describe "revenue automation scaffold smoke" {
         "adapter_request",
         "dispatch_receipt",
         "audit_record",
-        "evidence_envelope"
+        "evidence_envelope",
+        "retention_manifest"
       )
 
       foreach ($field in $requiredFields) {
@@ -1965,6 +1966,127 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.evidence_envelope) -Message "Malformed lead payload must not emit evidence_envelope."
+    }
+  }
+
+  Context "21) deterministic retention manifest contract" {
+    It "emits deterministic retention_manifest with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv019-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 980; conversion_bps = 330; impressions = 750 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv019-001"; segment = "saas"; pain_match = $true; budget = 3600; engagement_score = 94 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Retention manifest run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Retention manifest run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.retention_manifest) -Message "Successful lead_enrich should emit retention_manifest."
+
+      $manifest = $run1.result.retention_manifest
+      $requiredManifestFields = @(
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredManifestFields) {
+        Assert-True -Condition ($manifest.PSObject.Properties.Name -contains $field) -Message "retention_manifest missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$manifest.envelope_id) -Expected ([string]$run1.result.evidence_envelope.envelope_id) -Message "retention_manifest envelope_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.record_id) -Expected ([string]$run1.result.evidence_envelope.record_id) -Message "retention_manifest record_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.event_id) -Expected ([string]$run1.result.evidence_envelope.event_id) -Message "retention_manifest event_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.receipt_id) -Expected ([string]$run1.result.evidence_envelope.receipt_id) -Message "retention_manifest receipt_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.request_id) -Expected ([string]$run1.result.evidence_envelope.request_id) -Message "retention_manifest request_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.idempotency_key) -Expected ([string]$run1.result.evidence_envelope.idempotency_key) -Message "retention_manifest idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$manifest.campaign_id) -Expected ([string]$run1.result.evidence_envelope.campaign_id) -Message "retention_manifest campaign_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.channel) -Expected ([string]$run1.result.evidence_envelope.channel) -Message "retention_manifest channel mismatch."
+      Assert-Equal -Actual ([string]$manifest.language_code) -Expected ([string]$run1.result.evidence_envelope.language_code) -Message "retention_manifest language_code mismatch."
+      Assert-Equal -Actual ([string]$manifest.selected_variant_id) -Expected ([string]$run1.result.evidence_envelope.selected_variant_id) -Message "retention_manifest selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$manifest.provider_mode) -Expected "mock" -Message "retention_manifest provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$manifest.dry_run) -Expected $true -Message "retention_manifest dry_run mismatch."
+      Assert-Equal -Actual ([string]$manifest.status) -Expected "simulated" -Message "retention_manifest status mismatch."
+
+      $acceptedActionTypes = @($manifest.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "retention_manifest accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "retention_manifest accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "retention_manifest accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "retention_manifest_emitted" -Message "retention_manifest should include emission reason code."
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "dispatch_receipt_dry_run" -Message "retention_manifest should include dry-run receipt lineage."
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "template_lang_native" -Message "retention_manifest should include template lineage."
+      Assert-Contains -Collection @($manifest.reason_codes) -Value "variant_lang_perf_win" -Message "retention_manifest should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($manifest.PSObject.Properties.Name -contains $forbidden)) -Message "retention_manifest must not expose $forbidden."
+      }
+
+      $manifestJson1 = ($run1.result.retention_manifest | ConvertTo-Json -Depth 40 -Compress)
+      $manifestJson2 = ($run2.result.retention_manifest | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $manifestJson1 -Expected $manifestJson2 -Message "retention_manifest must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.retention_manifest.idempotency_key) -Expected ([string]$run2.result.retention_manifest.idempotency_key) -Message "retention_manifest idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit retention_manifest for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.retention_manifest) -Message "Malformed lead payload must not emit retention_manifest."
     }
   }
 }
