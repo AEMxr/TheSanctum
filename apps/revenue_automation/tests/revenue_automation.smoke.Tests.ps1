@@ -278,7 +278,8 @@ Describe "revenue automation scaffold smoke" {
         "proof_verification",
         "anchor_record",
         "index_receipt",
-        "archive_manifest"
+        "archive_manifest",
+        "notarization_ticket"
       )
 
       foreach ($field in $requiredFields) {
@@ -2861,6 +2862,141 @@ Describe "revenue automation scaffold smoke" {
       Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
       Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
       Assert-True -Condition ($null -eq $run.result.archive_manifest) -Message "Malformed lead payload must not emit archive_manifest."
+    }
+  }
+
+  Context "28) deterministic notarization ticket contract" {
+    It "emits deterministic notarization_ticket with ordered accepted_action_types, lineage, and privacy-safe fields" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv026-001"
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 1030; conversion_bps = 380; impressions = 810 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv026-001"; segment = "saas"; pain_match = $true; budget = 4400; engagement_score = 99 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Notarization ticket run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Notarization ticket run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.notarization_ticket) -Message "Successful lead_enrich should emit notarization_ticket."
+
+      $ticket = $run1.result.notarization_ticket
+      $requiredTicketFields = @(
+        "notarization_id",
+        "archive_id",
+        "index_id",
+        "anchor_id",
+        "verification_id",
+        "attestation_id",
+        "immutability_id",
+        "manifest_id",
+        "envelope_id",
+        "record_id",
+        "event_id",
+        "receipt_id",
+        "request_id",
+        "idempotency_key",
+        "campaign_id",
+        "channel",
+        "language_code",
+        "selected_variant_id",
+        "provider_mode",
+        "dry_run",
+        "status",
+        "accepted_action_types",
+        "reason_codes"
+      )
+      foreach ($field in $requiredTicketFields) {
+        Assert-True -Condition ($ticket.PSObject.Properties.Name -contains $field) -Message "notarization_ticket missing field: $field"
+      }
+
+      Assert-Equal -Actual ([string]$ticket.archive_id) -Expected ([string]$run1.result.archive_manifest.archive_id) -Message "notarization_ticket archive_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.index_id) -Expected ([string]$run1.result.archive_manifest.index_id) -Message "notarization_ticket index_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.anchor_id) -Expected ([string]$run1.result.archive_manifest.anchor_id) -Message "notarization_ticket anchor_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.verification_id) -Expected ([string]$run1.result.archive_manifest.verification_id) -Message "notarization_ticket verification_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.attestation_id) -Expected ([string]$run1.result.archive_manifest.attestation_id) -Message "notarization_ticket attestation_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.immutability_id) -Expected ([string]$run1.result.archive_manifest.immutability_id) -Message "notarization_ticket immutability_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.manifest_id) -Expected ([string]$run1.result.archive_manifest.manifest_id) -Message "notarization_ticket manifest_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.envelope_id) -Expected ([string]$run1.result.archive_manifest.envelope_id) -Message "notarization_ticket envelope_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.record_id) -Expected ([string]$run1.result.archive_manifest.record_id) -Message "notarization_ticket record_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.event_id) -Expected ([string]$run1.result.archive_manifest.event_id) -Message "notarization_ticket event_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.receipt_id) -Expected ([string]$run1.result.archive_manifest.receipt_id) -Message "notarization_ticket receipt_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.request_id) -Expected ([string]$run1.result.archive_manifest.request_id) -Message "notarization_ticket request_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.idempotency_key) -Expected ([string]$run1.result.archive_manifest.idempotency_key) -Message "notarization_ticket idempotency_key mismatch."
+      Assert-Equal -Actual ([string]$ticket.campaign_id) -Expected ([string]$run1.result.archive_manifest.campaign_id) -Message "notarization_ticket campaign_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.channel) -Expected ([string]$run1.result.archive_manifest.channel) -Message "notarization_ticket channel mismatch."
+      Assert-Equal -Actual ([string]$ticket.language_code) -Expected ([string]$run1.result.archive_manifest.language_code) -Message "notarization_ticket language_code mismatch."
+      Assert-Equal -Actual ([string]$ticket.selected_variant_id) -Expected ([string]$run1.result.archive_manifest.selected_variant_id) -Message "notarization_ticket selected_variant_id mismatch."
+      Assert-Equal -Actual ([string]$ticket.provider_mode) -Expected "mock" -Message "notarization_ticket provider_mode mismatch."
+      Assert-Equal -Actual ([bool]$ticket.dry_run) -Expected $true -Message "notarization_ticket dry_run mismatch."
+      Assert-Equal -Actual ([string]$ticket.status) -Expected "simulated" -Message "notarization_ticket status mismatch."
+
+      $acceptedActionTypes = @($ticket.accepted_action_types | ForEach-Object { [string]$_ })
+      Assert-Equal -Actual $acceptedActionTypes.Count -Expected 2 -Message "notarization_ticket accepted_action_types should contain exactly two entries."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[0]) -Expected "cta_buy" -Message "notarization_ticket accepted_action_types ordering mismatch for cta_buy."
+      Assert-Equal -Actual ([string]$acceptedActionTypes[1]) -Expected "cta_subscribe" -Message "notarization_ticket accepted_action_types ordering mismatch for cta_subscribe."
+
+      Assert-Contains -Collection @($ticket.reason_codes) -Value "notarization_ticket_emitted" -Message "notarization_ticket should include emission reason code."
+      Assert-Contains -Collection @($ticket.reason_codes) -Value "dispatch_receipt_dry_run" -Message "notarization_ticket should include dry-run receipt lineage."
+      Assert-Contains -Collection @($ticket.reason_codes) -Value "template_lang_native" -Message "notarization_ticket should include template lineage."
+      Assert-Contains -Collection @($ticket.reason_codes) -Value "variant_lang_perf_win" -Message "notarization_ticket should include variant lineage."
+
+      $forbiddenFields = @("latitude", "longitude", "email", "phone", "ip_address")
+      foreach ($forbidden in $forbiddenFields) {
+        Assert-True -Condition (-not ($ticket.PSObject.Properties.Name -contains $forbidden)) -Message "notarization_ticket must not expose $forbidden."
+      }
+
+      $ticketJson1 = ($run1.result.notarization_ticket | ConvertTo-Json -Depth 40 -Compress)
+      $ticketJson2 = ($run2.result.notarization_ticket | ConvertTo-Json -Depth 40 -Compress)
+      Assert-Equal -Actual $ticketJson1 -Expected $ticketJson2 -Message "notarization_ticket must remain deterministic across repeated runs."
+      Assert-Equal -Actual ([string]$run1.result.notarization_ticket.idempotency_key) -Expected ([string]$run2.result.notarization_ticket.idempotency_key) -Message "notarization_ticket idempotency_key must remain stable across repeated runs."
+    }
+
+    It "does not emit notarization_ticket for malformed lead payload FAILED path" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          leads = "bad-format"
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 1 -Message "Malformed lead payload should return process exit 1."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "FAILED" -Message "Malformed lead payload should return FAILED."
+      Assert-True -Condition ($null -eq $run.result.notarization_ticket) -Message "Malformed lead payload must not emit notarization_ticket."
     }
   }
 }

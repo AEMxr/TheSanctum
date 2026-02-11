@@ -196,6 +196,7 @@ $result = [pscustomobject]@{
   anchor_record = if ($routeResult.PSObject.Properties.Name -contains "anchor_record") { $routeResult.anchor_record } else { $null }
   index_receipt = if ($routeResult.PSObject.Properties.Name -contains "index_receipt") { $routeResult.index_receipt } else { $null }
   archive_manifest = if ($routeResult.PSObject.Properties.Name -contains "archive_manifest") { $routeResult.archive_manifest } else { $null }
+  notarization_ticket = if ($routeResult.PSObject.Properties.Name -contains "notarization_ticket") { $routeResult.notarization_ticket } else { $null }
 }
 
 if ($config.emit_telemetry) {
