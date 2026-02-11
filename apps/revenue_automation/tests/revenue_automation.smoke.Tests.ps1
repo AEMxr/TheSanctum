@@ -796,4 +796,150 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition ($null -eq $run.result.proposal) -Message "Malformed lead payload must not emit proposal/template fields."
     }
   }
+
+  Context "11) language-aware variant selection" {
+    It "selects deterministic variant for repeated same language input" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          region_code = "US"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "en"; region_code = "US"; variant_id = "variant_en_alpha"; ctr_bps = 800; conversion_bps = 300; impressions = 500 },
+              [pscustomobject]@{ language_code = "en"; region_code = "US"; variant_id = "variant_en_beta"; ctr_bps = 700; conversion_bps = 200; impressions = 400 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-variant-en"; segment = "saas"; pain_match = $true; budget = 2500; engagement_score = 80 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Variant deterministic run should exit 0."
+      Assert-Equal -Actual $run2.exit_code -Expected 0 -Message "Variant deterministic repeat run should exit 0."
+      Assert-True -Condition ($null -ne $run1.result.route.variant) -Message "Variant selection should be emitted on successful lead_enrich route."
+      Assert-Equal -Actual ([string]$run1.result.route.variant.selected_variant_id) -Expected "variant_en_alpha" -Message "Expected deterministic best EN variant."
+      Assert-Equal -Actual ([string]$run1.result.route.variant.confidence_band) -Expected "high" -Message "Expected high confidence for clear winner."
+      Assert-Contains -Collection @($run1.result.route.variant.selection_reason_codes) -Value "variant_lang_perf_win" -Message "Variant reason should include perf win code."
+      Assert-Equal -Actual (($run1.result.route.variant | ConvertTo-Json -Depth 20 -Compress)) -Expected (($run2.result.route.variant | ConvertTo-Json -Depth 20 -Compress)) -Message "Variant payload should be deterministic across repeated runs."
+    }
+
+    It "can select different variants for different language segments" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $sharedSegments = @(
+        [pscustomobject]@{ language_code = "en"; region_code = "US"; variant_id = "variant_en_perf"; ctr_bps = 900; conversion_bps = 250; impressions = 300 },
+        [pscustomobject]@{ language_code = "es"; region_code = "MX"; variant_id = "variant_es_perf"; ctr_bps = 920; conversion_bps = 260; impressions = 300 }
+      )
+
+      $taskEn = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "en-US"
+          region_code = "US"
+          trend_summary = [pscustomobject]@{ segments = $sharedSegments }
+          leads = @([pscustomobject]@{ lead_id = "lead-en"; segment = "saas"; pain_match = $true; budget = 2000; engagement_score = 72 })
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $taskEs = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "es-MX"
+          region_code = "MX"
+          trend_summary = [pscustomobject]@{ segments = $sharedSegments }
+          leads = @([pscustomobject]@{ lead_id = "lead-es"; segment = "saas"; pain_match = $true; budget = 2000; engagement_score = 72 })
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $runEn = Invoke-RevenueRun -Config $config -Task $taskEn
+      $runEs = Invoke-RevenueRun -Config $config -Task $taskEs
+
+      Assert-Equal -Actual ([string]$runEn.result.route.variant.selected_variant_id) -Expected "variant_en_perf" -Message "EN segment should resolve EN variant."
+      Assert-Equal -Actual ([string]$runEs.result.route.variant.selected_variant_id) -Expected "variant_es_perf" -Message "ES segment should resolve ES variant."
+      Assert-True -Condition (([string]$runEn.result.route.variant.selected_variant_id) -ne ([string]$runEs.result.route.variant.selected_variant_id)) -Message "Different language segments should be able to choose different variants."
+    }
+
+    It "uses deterministic tie-break ordering by variant_id when scores are equal" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "fr-FR"
+          region_code = "FR"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "fr"; region_code = "FR"; variant_id = "variant_fr_beta"; ctr_bps = 400; conversion_bps = 200; impressions = 100 },
+              [pscustomobject]@{ language_code = "fr"; region_code = "FR"; variant_id = "variant_fr_alpha"; ctr_bps = 400; conversion_bps = 200; impressions = 100 }
+            )
+          }
+          leads = @([pscustomobject]@{ lead_id = "lead-fr"; segment = "b2b"; pain_match = $true; budget = 2200; engagement_score = 70 })
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual ([string]$run.result.route.variant.selected_variant_id) -Expected "variant_fr_alpha" -Message "Tie-break should use variant_id ascending."
+      Assert-Contains -Collection @($run.result.route.variant.selection_reason_codes) -Value "variant_lang_tiebreak" -Message "Tie-break reason code should be emitted."
+    }
+
+    It "emits fallback variant for missing trend summary without crashing" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          language_code = "de-DE"
+          region_code = "DE"
+          leads = @([pscustomobject]@{ lead_id = "lead-de"; segment = "b2b"; pain_match = $true; budget = 2200; engagement_score = 70 })
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run = Invoke-RevenueRun -Config $config -Task $task
+      Assert-Equal -Actual $run.exit_code -Expected 0 -Message "Missing trend summary should not crash."
+      Assert-Equal -Actual ([string]$run.result.status) -Expected "SUCCESS" -Message "Missing trend summary should preserve successful path."
+      Assert-Equal -Actual ([string]$run.result.route.variant.selected_variant_id) -Expected "variant_de_core" -Message "Missing trend summary should use deterministic language fallback variant."
+      Assert-Contains -Collection @($run.result.route.variant.selection_reason_codes) -Value "variant_lang_tiebreak" -Message "Fallback variant should emit stable reason code."
+    }
+  }
 }
