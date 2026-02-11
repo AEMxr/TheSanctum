@@ -1,7 +1,7 @@
-{
+﻿{
   "contract_name": "language_detection",
   "contract_version": "v1",
-  "summary": "Deterministic language detection contract for inbound context text.",
+  "summary": "Deterministic language detection and conversion contract for inbound context text.",
   "request": {
     "required": [
       "input_text",
@@ -15,6 +15,23 @@
       "source_channel": {
         "type": "string",
         "description": "Channel identifier for attribution (e.g. reddit/x/web)."
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "detect",
+          "convert",
+          "detect_and_convert"
+        ],
+        "description": "Execution mode; defaults to detect."
+      },
+      "source_language": {
+        "type": "string",
+        "description": "Optional source language hint (ISO-like code)."
+      },
+      "target_language": {
+        "type": "string",
+        "description": "Optional target language for conversion modes."
       }
     }
   },
@@ -22,8 +39,13 @@
     "required": [
       "input_text",
       "source_channel",
+      "mode",
+      "source_language",
+      "target_language",
       "detected_language",
       "confidence_band",
+      "converted_text",
+      "conversion_applied",
       "reason_codes"
     ],
     "properties": {
@@ -31,6 +53,20 @@
         "type": "string"
       },
       "source_channel": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "detect",
+          "convert",
+          "detect_and_convert"
+        ]
+      },
+      "source_language": {
+        "type": "string"
+      },
+      "target_language": {
         "type": "string"
       },
       "detected_language": {
@@ -45,6 +81,15 @@
           "high"
         ]
       },
+      "converted_text": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "conversion_applied": {
+        "type": "boolean"
+      },
       "reason_codes": {
         "type": "array",
         "items": {
@@ -54,8 +99,9 @@
     }
   },
   "determinism_notes": [
-    "No randomness is allowed in detection.",
+    "No randomness is allowed in detection or conversion.",
     "Unknown or ambiguous text must resolve to detected_language=und.",
+    "Unsupported target language falls back deterministically with explicit reason codes.",
     "Tie-break logic is deterministic by score and language code order."
   ]
 }

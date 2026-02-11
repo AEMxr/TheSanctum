@@ -1,4 +1,4 @@
-# apps/api/tests/api.contract.Tests.ps1
+﻿# apps/api/tests/api.contract.Tests.ps1
 # Pester 3.x / 5.x compatible
 # Run: Invoke-Pester apps/api/tests/api.contract.Tests.ps1
 
@@ -54,9 +54,19 @@ Describe "language detection API contract" {
       Assert-Equal -Actual ([string]$contract.contract_name) -Expected "language_detection" -Message "Contract name mismatch."
       Assert-Contains -Collection @($contract.request.required) -Value "input_text" -Message "request.required missing input_text."
       Assert-Contains -Collection @($contract.request.required) -Value "source_channel" -Message "request.required missing source_channel."
+      Assert-Contains -Collection @($contract.request.properties.mode.enum) -Value "detect" -Message "mode enum missing detect."
+      Assert-Contains -Collection @($contract.request.properties.mode.enum) -Value "convert" -Message "mode enum missing convert."
+      Assert-Contains -Collection @($contract.request.properties.mode.enum) -Value "detect_and_convert" -Message "mode enum missing detect_and_convert."
+
+      Assert-Contains -Collection @($contract.response.required) -Value "mode" -Message "response.required missing mode."
+      Assert-Contains -Collection @($contract.response.required) -Value "source_language" -Message "response.required missing source_language."
+      Assert-Contains -Collection @($contract.response.required) -Value "target_language" -Message "response.required missing target_language."
       Assert-Contains -Collection @($contract.response.required) -Value "detected_language" -Message "response.required missing detected_language."
       Assert-Contains -Collection @($contract.response.required) -Value "confidence_band" -Message "response.required missing confidence_band."
+      Assert-Contains -Collection @($contract.response.required) -Value "converted_text" -Message "response.required missing converted_text."
+      Assert-Contains -Collection @($contract.response.required) -Value "conversion_applied" -Message "response.required missing conversion_applied."
       Assert-Contains -Collection @($contract.response.required) -Value "reason_codes" -Message "response.required missing reason_codes."
+
       Assert-Contains -Collection @($contract.response.properties.confidence_band.enum) -Value "low" -Message "confidence_band enum missing low."
       Assert-Contains -Collection @($contract.response.properties.confidence_band.enum) -Value "medium" -Message "confidence_band enum missing medium."
       Assert-Contains -Collection @($contract.response.properties.confidence_band.enum) -Value "high" -Message "confidence_band enum missing high."
@@ -89,6 +99,52 @@ Describe "language detection API contract" {
       $a = Invoke-LanguageDetection -Text "hello thanks offer client service automation business" -Channel "reddit"
       $b = Invoke-LanguageDetection -Text "hello thanks offer client service automation business" -Channel "reddit"
       Assert-Equal -Actual ($a | ConvertTo-Json -Depth 10 -Compress) -Expected ($b | ConvertTo-Json -Depth 10 -Compress) -Message "Repeated input output mismatch."
+    }
+  }
+
+  Context "mode behavior" {
+    It "supports detect mode without conversion side effects" {
+      $result = Invoke-LanguageApi -Text "hola gracias oferta cliente servicio automatizacion" -Channel "reddit" -Mode "detect" -SourceLanguage "" -TargetLanguage ""
+      Assert-Equal -Actual ([string]$result.mode) -Expected "detect" -Message "Detect mode mismatch."
+      Assert-Equal -Actual ([string]$result.detected_language) -Expected "es" -Message "Detect mode language mismatch."
+      Assert-Equal -Actual ([bool]$result.conversion_applied) -Expected $false -Message "Detect mode must not apply conversion."
+      Assert-Equal -Actual ([string]$result.target_language) -Expected "" -Message "Detect mode target_language should be blank."
+      Assert-Equal -Actual $result.converted_text -Expected $null -Message "Detect mode converted_text should be null."
+    }
+
+    It "supports detect_and_convert with deterministic fallback reason" {
+      $result = Invoke-LanguageApi -Text "hola gracias oferta cliente servicio automatizacion negocio" -Channel "reddit" -Mode "detect_and_convert" -SourceLanguage "" -TargetLanguage "en"
+      Assert-Equal -Actual ([string]$result.mode) -Expected "detect_and_convert" -Message "detect_and_convert mode mismatch."
+      Assert-Equal -Actual ([string]$result.detected_language) -Expected "es" -Message "detect_and_convert language mismatch."
+      Assert-Equal -Actual ([string]$result.target_language) -Expected "en" -Message "detect_and_convert target language mismatch."
+      Assert-Equal -Actual ([bool]$result.conversion_applied) -Expected $true -Message "detect_and_convert should apply conversion."
+      Assert-Equal -Actual ([string]$result.converted_text) -Expected "hello thanks offer client service automation business" -Message "detect_and_convert converted text mismatch."
+      Assert-Contains -Collection @($result.reason_codes) -Value "lang_detect_high_conf" -Message "detect_and_convert should include detection reason code."
+      Assert-Contains -Collection @($result.reason_codes) -Value "lang_convert_fallback" -Message "detect_and_convert should include conversion reason code."
+    }
+
+    It "supports explicit convert mode with source and target language" {
+      $result = Invoke-LanguageApi -Text "hello offer client service automation business" -Channel "web" -Mode "convert" -SourceLanguage "en" -TargetLanguage "es"
+      Assert-Equal -Actual ([string]$result.mode) -Expected "convert" -Message "Convert mode mismatch."
+      Assert-Equal -Actual ([string]$result.source_language) -Expected "en" -Message "Convert mode source language mismatch."
+      Assert-Equal -Actual ([string]$result.target_language) -Expected "es" -Message "Convert mode target language mismatch."
+      Assert-Equal -Actual ([bool]$result.conversion_applied) -Expected $true -Message "Convert mode should apply conversion."
+      Assert-Equal -Actual ([string]$result.converted_text) -Expected "hola oferta cliente servicio automatizacion negocio" -Message "Convert mode converted text mismatch."
+      Assert-Contains -Collection @($result.reason_codes) -Value "lang_convert_fallback" -Message "Convert mode should include conversion reason code."
+    }
+
+    It "falls back deterministically on unsupported target language" {
+      $result = Invoke-LanguageApi -Text "hello offer client" -Channel "web" -Mode "convert" -SourceLanguage "en" -TargetLanguage "it"
+      Assert-Equal -Actual ([string]$result.target_language) -Expected "en" -Message "Unsupported target should fallback to en."
+      Assert-Equal -Actual ([bool]$result.conversion_applied) -Expected $false -Message "Unsupported target fallback to same language should not apply conversion."
+      Assert-Contains -Collection @($result.reason_codes) -Value "lang_convert_unsupported_target" -Message "Unsupported target reason code missing."
+      Assert-Contains -Collection @($result.reason_codes) -Value "lang_convert_native" -Message "Native fallback reason code missing."
+    }
+
+    It "is deterministic for repeated convert input" {
+      $a = Invoke-LanguageApi -Text "hello thanks offer" -Channel "reddit" -Mode "convert" -SourceLanguage "en" -TargetLanguage "fr"
+      $b = Invoke-LanguageApi -Text "hello thanks offer" -Channel "reddit" -Mode "convert" -SourceLanguage "en" -TargetLanguage "fr"
+      Assert-Equal -Actual ($a | ConvertTo-Json -Depth 20 -Compress) -Expected ($b | ConvertTo-Json -Depth 20 -Compress) -Message "Repeated convert input output mismatch."
     }
   }
 }
