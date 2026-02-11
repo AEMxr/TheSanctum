@@ -168,5 +168,17 @@ Describe "language detection API contract" {
       Assert-Contains -Collection $langs -Value "fr" -Message "Health payload supported_languages missing fr."
       Assert-Contains -Collection $langs -Value "pt" -Message "Health payload supported_languages missing pt."
     }
+
+    It "health mode CLI returns parseable readiness payload" {
+      $output = @(& $script:IndexPath -Health 2>&1)
+      $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+      Assert-Equal -Actual $exitCode -Expected 0 -Message "Health mode CLI should exit 0."
+
+      $raw = ($output -join [Environment]::NewLine)
+      $health = $raw | ConvertFrom-Json
+      Assert-Equal -Actual ([string]$health.service) -Expected "language_api" -Message "Health mode CLI service mismatch."
+      Assert-Equal -Actual ([string]$health.status) -Expected "ok" -Message "Health mode CLI status mismatch."
+      Assert-Equal -Actual ([bool]$health.ready) -Expected $true -Message "Health mode CLI readiness mismatch."
+    }
   }
 }
