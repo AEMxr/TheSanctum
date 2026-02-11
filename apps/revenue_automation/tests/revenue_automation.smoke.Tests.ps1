@@ -263,7 +263,8 @@ Describe "revenue automation scaffold smoke" {
         "offer",
         "proposal",
         "telemetry_event_stub",
-        "telemetry_event"
+        "telemetry_event",
+        "campaign_packet"
       )
 
       foreach ($field in $requiredFields) {
@@ -1018,6 +1019,60 @@ Describe "revenue automation scaffold smoke" {
       Assert-True -Condition (-not ($run1.result.telemetry_event.PSObject.Properties.Name -contains "longitude")) -Message "Telemetry event must not expose longitude."
 
       Assert-Equal -Actual (($run1.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Expected (($run2.result.telemetry_event | ConvertTo-Json -Depth 20 -Compress)) -Message "Telemetry event must remain deterministic across repeated runs."
+    }
+  }
+
+  Context "13) dual-cta campaign packet contract" {
+    It "emits deterministic campaign packet with buy/subscribe stubs for successful lead_enrich" {
+      $config = [pscustomobject]@{
+        enable_revenue_automation = $true
+        provider_mode = "mock"
+        emit_telemetry = $false
+        safe_mode = $true
+        dry_run = $true
+      }
+
+      $task = [pscustomobject]@{
+        task_id = [guid]::NewGuid().ToString()
+        task_type = "lead_enrich"
+        payload = [pscustomobject]@{
+          source_channel = "reddit"
+          campaign_id = "camp-rv008-001"
+          language_code = "en-US"
+          region_code = "US"
+          trend_summary = [pscustomobject]@{
+            segments = @(
+              [pscustomobject]@{ language_code = "en"; region_code = "US"; variant_id = "variant_en_perf"; ctr_bps = 950; conversion_bps = 310; impressions = 450 }
+            )
+          }
+          leads = @(
+            [pscustomobject]@{ lead_id = "lead-rv008-001"; segment = "saas"; pain_match = $true; budget = 2600; engagement_score = 85 }
+          )
+        }
+        created_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+      }
+
+      $run1 = Invoke-RevenueRun -Config $config -Task $task
+      $run2 = Invoke-RevenueRun -Config $config -Task $task
+
+      Assert-Equal -Actual $run1.exit_code -Expected 0 -Message "Campaign packet run should exit 0."
+      Assert-Equal -Actual ([string]$run1.result.status) -Expected "SUCCESS" -Message "Campaign packet run should return SUCCESS."
+      Assert-True -Condition ($null -ne $run1.result.campaign_packet) -Message "Successful lead_enrich should emit campaign_packet."
+
+      Assert-Equal -Actual ([string]$run1.result.campaign_packet.campaign_id) -Expected "camp-rv008-001" -Message "Campaign packet campaign_id mismatch."
+      Assert-Equal -Actual ([string]$run1.result.campaign_packet.tier) -Expected ([string]$run1.result.offer.tier) -Message "Campaign packet tier should match offer tier."
+      Assert-True -Condition (@($run1.result.campaign_packet.channels).Count -gt 0) -Message "Campaign packet should include channels."
+      Assert-Equal -Actual ([string]$run1.result.campaign_packet.channels[0]) -Expected "reddit" -Message "Campaign packet channel mismatch."
+      Assert-True -Condition (@($run1.result.campaign_packet.copy_variants).Count -ge 2) -Message "Campaign packet should include copy variants."
+      Assert-True -Condition (([string]$run1.result.campaign_packet.cta_buy_stub) -like "stub://checkout/*") -Message "Campaign packet buy CTA stub mismatch."
+      Assert-True -Condition (([string]$run1.result.campaign_packet.cta_subscribe_stub) -like "stub://subscribe/*") -Message "Campaign packet subscribe CTA stub mismatch."
+      Assert-Contains -Collection @($run1.result.campaign_packet.reason_codes) -Value "campaign_dual_cta_emitted" -Message "Campaign packet should include dual CTA reason code."
+      Assert-Contains -Collection @($run1.result.campaign_packet.reason_codes) -Value "template_lang_native" -Message "Campaign packet should carry template reason lineage."
+      Assert-Contains -Collection @($run1.result.campaign_packet.reason_codes) -Value "variant_lang_perf_win" -Message "Campaign packet should carry variant reason lineage."
+
+      $packet1 = ($run1.result.campaign_packet | ConvertTo-Json -Depth 30 -Compress)
+      $packet2 = ($run2.result.campaign_packet | ConvertTo-Json -Depth 30 -Compress)
+      Assert-Equal -Actual $packet1 -Expected $packet2 -Message "Campaign packet must remain deterministic across repeated runs."
     }
   }
 }
