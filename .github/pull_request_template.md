@@ -78,3 +78,19 @@ git cherry-pick -x <commit_sha_to_revert_or_reapply>
 - [ ] Required gates are green
 - [ ] Evidence artifacts are present and accessible
 - [ ] Rollback instructions are executable
+
+## Exception Justification (required for non-hardening PRs into main)
+
+Exception-ID: EXC-YYYYMMDD-<slug>
+
+- [ ] Rollback commands included
+- [ ] Pilot boundary unchanged (`delivery_mode=tenant_only`, `cross_sell_allowed=false`)
+
+Reason:
+- ...
+
+Risk:
+- ...
+
+Compensating controls:
+- ...
