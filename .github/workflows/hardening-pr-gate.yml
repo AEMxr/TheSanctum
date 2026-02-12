@@ -2,14 +2,8 @@ name: hardening-pr-gate
 
 on:
   pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - edited
-      - synchronize
-      - reopened
-      - ready_for_review
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -19,85 +13,140 @@ jobs:
   enforce-hardening-gate:
     runs-on: ubuntu-latest
     if: ${{ github.event.pull_request.draft == false }}
+    env:
+      # Repo variable (Settings -> Secrets and variables -> Actions -> Variables)
+      # Example: "alice,bob,carol"
+      GOVERNANCE_APPROVERS: ${{ vars.GOVERNANCE_APPROVERS }}
     steps:
-      - name: Validate hardening PR contract
+      - name: Validate governance contract
         uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
             const body = pr.body || "";
             const headRef = pr.head.ref || "";
+            const labels = (pr.labels || []).map(l => l.name);
             const errors = [];
 
-            if (!/^hardening\/.+/.test(headRef)) {
-              errors.push(`Head branch must match hardening/* (actual: ${headRef || "(empty)"}).`);
+            const isHardening = /^hardening\/.+/.test(headRef);
+            const isAllowedExceptionBranch =
+              /^hotfix\/.+/.test(headRef) ||
+              /^release\/.+/.test(headRef) ||
+              /^docs\/.+/.test(headRef);
+
+            const hasOverrideLabel = labels.includes("override-governance-approved");
+            const hasCriticalOverrideLabel = labels.includes("override-critical-path-approved");
+
+            // ---- Helpers ----
+            function requireChecked(pattern, label) {
+              if (!pattern.test(body)) errors.push(`Missing checked item: ${label}`);
             }
 
-            const requiredCheckedPatterns = [
-              {
-                label: "Branch classification checkbox",
-                pattern: /- \[[xX]\]\s+Branch name uses `hardening\/\*`/
-              },
-              {
-                label: "Boundary checkbox: delivery_mode=tenant_only",
-                pattern: /- \[[xX]\]\s+`delivery_mode=tenant_only` verified/
-              },
-              {
-                label: "Boundary checkbox: cross_sell_allowed=false",
-                pattern: /- \[[xX]\]\s+`cross_sell_allowed=false` verified/
-              },
-              {
-                label: "Test gate checkbox: language integration",
-                pattern: /- \[[xX]\]\s+`tests\/integration\/language_api\.http\.Tests\.ps1`/
-              },
-              {
-                label: "Test gate checkbox: revenue integration",
-                pattern: /- \[[xX]\]\s+`tests\/integration\/revenue_api\.http\.Tests\.ps1`/
-              },
-              {
-                label: "Test gate checkbox: both APIs smoke",
-                pattern: /- \[[xX]\]\s+`tests\/both_apis\.smoke\.Tests\.ps1`/
-              },
-              {
-                label: "Artifact checkbox: language ready payload",
-                pattern: /- \[[xX]\]\s+Ready payload \(language\):\s+`artifacts\/runtime\/language_ready\.pilot\.json`/
-              },
-              {
-                label: "Artifact checkbox: revenue ready payload",
-                pattern: /- \[[xX]\]\s+Ready payload \(revenue\):\s+`artifacts\/runtime\/revenue_ready\.pilot\.json`/
-              },
-              {
-                label: "Artifact checkbox: smoke summary",
-                pattern: /- \[[xX]\]\s+Smoke summary:\s+`artifacts\/runtime\/both_apis_smoke\.summary\.postmerge\.json`/
-              },
-              {
-                label: "Artifact checkbox: commit fingerprint",
-                pattern: /- \[[xX]\]\s+Commit fingerprint:\s+`artifacts\/runtime\/pilot_commit_[^`]+\.txt`/
-              }
+            function requireContains(text, label) {
+              if (!body.includes(text)) errors.push(`Required content missing: ${label}`);
+            }
+
+            // Get approvals (latest review state per user)
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const number = pr.number;
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: number, per_page: 100
+            });
+
+            const latestStateByUser = new Map();
+            for (const r of reviews) latestStateByUser.set(r.user.login.toLowerCase(), r.state);
+
+            const approvedBy = [...latestStateByUser.entries()]
+              .filter(([, state]) => state === "APPROVED")
+              .map(([user]) => user);
+
+            const approverList = (process.env.GOVERNANCE_APPROVERS || "")
+              .split(",")
+              .map(s => s.trim().toLowerCase())
+              .filter(Boolean);
+
+            const hasGovernanceApproval =
+              approverList.length > 0
+                ? approvedBy.some(u => approverList.includes(u))
+                : false;
+
+            // Changed files for critical-path check
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: number, per_page: 100
+            });
+            const changed = files.map(f => f.filename);
+
+            const criticalPathRegexes = [
+              /^apps\/api\/src\/index\.ps1$/,
+              /^apps\/revenue_automation\/src\/index\.ps1$/,
+              /^apps\/api\/config\.example\.json$/,
+              /^apps\/revenue_automation\/config\.example\.json$/,
+              /^scripts\/lib\/http_service_common\.ps1$/
             ];
 
-            for (const check of requiredCheckedPatterns) {
-              if (!check.pattern.test(body)) {
-                errors.push(`Missing checked item: ${check.label}.`);
+            const criticalTouched = changed.filter(path =>
+              criticalPathRegexes.some(rx => rx.test(path))
+            );
+
+            // ---- Path A: hardening/* strict contract ----
+            if (isHardening) {
+              requireChecked(/- \[[xX]\]\s+Branch name uses `hardening\/\*`/, "Branch classification checkbox");
+              requireChecked(/- \[[xX]\]\s+`delivery_mode=tenant_only` verified/, "Boundary checkbox: delivery_mode=tenant_only");
+              requireChecked(/- \[[xX]\]\s+`cross_sell_allowed=false` verified/, "Boundary checkbox: cross_sell_allowed=false");
+
+              requireChecked(/- \[[xX]\]\s+`tests\/integration\/language_api\.http\.Tests\.ps1`/, "Test gate: language_api integration");
+              requireChecked(/- \[[xX]\]\s+`tests\/integration\/revenue_api\.http\.Tests\.ps1`/, "Test gate: revenue_api integration");
+              requireChecked(/- \[[xX]\]\s+`tests\/both_apis\.smoke\.Tests\.ps1`/, "Test gate: both_apis smoke");
+
+              requireChecked(/- \[[xX]\]\s+Ready payload \(language\):\s+`artifacts\/runtime\/language_ready\.pilot\.json`/, "Artifact: language ready payload");
+              requireChecked(/- \[[xX]\]\s+Ready payload \(revenue\):\s+`artifacts\/runtime\/revenue_ready\.pilot\.json`/, "Artifact: revenue ready payload");
+              requireChecked(/- \[[xX]\]\s+Smoke summary:\s+`artifacts\/runtime\/both_apis_smoke\.summary\.postmerge\.json`/, "Artifact: smoke summary");
+              requireChecked(/- \[[xX]\]\s+Commit fingerprint:\s+`artifacts\/runtime\/pilot_commit_[^`]+\.txt`/, "Artifact: commit fingerprint");
+
+              requireContains("artifacts/runtime/language_ready.pilot.json", "language ready artifact path");
+              requireContains("artifacts/runtime/revenue_ready.pilot.json", "revenue ready artifact path");
+              requireContains("artifacts/runtime/both_apis_smoke.summary.postmerge.json", "smoke summary artifact path");
+            } else {
+              // ---- Path B: controlled exception lane ----
+              if (!isAllowedExceptionBranch) {
+                errors.push(`Non-hardening PR branch must be one of hotfix/*, release/*, docs/* (actual: ${headRef || "(empty)"}).`);
+              }
+
+              if (!hasOverrideLabel) {
+                errors.push("Missing required label: override-governance-approved.");
+              }
+
+              if (!/## Exception Justification/i.test(body)) {
+                errors.push("Missing section: '## Exception Justification'.");
+              }
+
+              if (!/Exception-ID:\s*[A-Za-z0-9._-]+/i.test(body)) {
+                errors.push("Missing or invalid 'Exception-ID: ...' in PR body.");
+              }
+
+              requireChecked(/- \[[xX]\]\s+Rollback commands included/, "Exception checkbox: rollback commands included");
+              requireChecked(/- \[[xX]\]\s+Pilot boundary unchanged/, "Exception checkbox: pilot boundary unchanged");
+
+              if (!hasGovernanceApproval) {
+                if (approverList.length === 0) {
+                  errors.push("GOVERNANCE_APPROVERS variable is empty; cannot validate governance approval.");
+                } else {
+                  errors.push(`No approval from governance approvers. Allowed: ${approverList.join(", ")}`);
+                }
+              }
+
+              if (criticalTouched.length > 0 && !hasCriticalOverrideLabel) {
+                errors.push(
+                  `Critical paths changed without 'override-critical-path-approved' label: ${criticalTouched.join(", ")}`
+                );
               }
             }
 
-            const requiredArtifactPaths = [
-              "artifacts/runtime/language_ready.pilot.json",
-              "artifacts/runtime/revenue_ready.pilot.json",
-              "artifacts/runtime/both_apis_smoke.summary.postmerge.json"
-            ];
-
-            for (const path of requiredArtifactPaths) {
-              if (!body.includes(path)) {
-                errors.push(`Required artifact path not found in PR body: ${path}.`);
-              }
-            }
-
-            if (errors.length > 0) {
-              core.setFailed(`Hardening PR gate failed:\n- ${errors.join("\n- ")}`);
+            if (errors.length) {
+              core.setFailed(`Governance gate failed:\n- ${errors.join("\n- ")}`);
               return;
             }
 
-            core.info("Hardening PR gate checks passed.");
-
+            core.info("Governance gate checks passed.");

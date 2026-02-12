@@ -1,0 +1,7 @@
+# Global fallback
+* @AEMxr
+
+# Critical runtime and middleware paths
+/apps/api/src/index.ps1 @AEMxr
+/apps/revenue_automation/src/index.ps1 @AEMxr
+/scripts/lib/http_service_common.ps1 @AEMxr
