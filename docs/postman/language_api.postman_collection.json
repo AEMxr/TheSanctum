@@ -1,0 +1,51 @@
+{
+  "info": {
+    "name": "Sanctum Language API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8081" },
+    { "key": "apiKey", "value": "dev-local-key" },
+    { "key": "idempotencyKey", "value": "lang-idem-001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Detect",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"input_text\": \"hola gracias oferta cliente\",\n  \"source_channel\": \"reddit\",\n  \"mode\": \"detect\"\n}"
+        },
+        "url": "{{baseUrl}}/v1/language/detect"
+      }
+    },
+    {
+      "name": "Translate",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"input_text\": \"hola gracias oferta cliente\",\n  \"source_channel\": \"reddit\",\n  \"source_language\": \"es\",\n  \"target_language\": \"en\",\n  \"mode\": \"convert\"\n}"
+        },
+        "url": "{{baseUrl}}/v1/language/translate"
+      }
+    }
+  ]
+}

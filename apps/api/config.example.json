@@ -1,0 +1,23 @@
+﻿{
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8081,
+    "schema_version": "language-api-http-v1",
+    "max_request_bytes": 65536,
+    "request_timeout_ms": 15000,
+    "idempotency_ttl_seconds": 300,
+    "rate_limit": {
+      "max_requests": 60,
+      "window_seconds": 60
+    },
+    "api_keys": [
+      {
+        "key_id": "dev-local",
+        "key": "dev-local-key",
+        "key_sha256": "3700285e3c8496a57e45eb1ccd43f2424852788576961320fbb31f86f17edb61",
+        "role": "admin"
+      }
+    ],
+    "usage_ledger_path": "apps/api/artifacts/usage/language_api_usage.jsonl"
+  }
+}

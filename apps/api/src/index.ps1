@@ -6,11 +6,18 @@
   [string]$Mode = "detect",
   [string]$SourceLanguage = "",
   [string]$TargetLanguage = "",
-  [switch]$Health
+  [switch]$Health,
+  [switch]$Serve,
+  [string]$ConfigPath = "",
+  [string]$HttpHost = "",
+  [int]$Port = 0
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+$apiRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+. (Join-Path $apiRepoRoot "scripts\lib\http_service_common.ps1")
 
 function Get-LanguageDetectionContract {
   $contractPath = Join-Path $PSScriptRoot "contracts/language_detection.contract.json"
@@ -394,8 +401,373 @@ function Invoke-LanguageApi {
   }
 }
 
+function Get-LanguageApiRuntimeConfig {
+  $configObject = $null
+  $resolvedConfigPath = $ConfigPath
+  if ([string]::IsNullOrWhiteSpace($resolvedConfigPath)) {
+    $resolvedConfigPath = Join-Path $apiRepoRoot "apps\api\config.example.json"
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($resolvedConfigPath) -and (Test-Path -Path $resolvedConfigPath -PathType Leaf)) {
+    $configObject = Get-Content -Path $resolvedConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  }
+
+  $defaultLedger = Join-Path $apiRepoRoot "apps\api\artifacts\usage\language_api_usage.jsonl"
+  $runtime = Get-ApiHttpConfig `
+    -ServiceName "language_api" `
+    -ConfigObject $configObject `
+    -DefaultPort 8081 `
+    -DefaultUsageLedgerPath $defaultLedger `
+    -DefaultSchemaVersion "language-api-http-v1"
+
+  if (-not [string]::IsNullOrWhiteSpace($HttpHost)) {
+    $runtime.host = ([string]$HttpHost).Trim()
+  }
+  if ($Port -gt 0) {
+    $runtime.port = $Port
+  }
+
+  $runtime | Add-Member -NotePropertyName max_input_chars -NotePropertyValue 10000 -Force
+  if ($null -ne $configObject -and $configObject.PSObject.Properties.Name -contains "http") {
+    $http = $configObject.http
+    if ($http.PSObject.Properties.Name -contains "max_input_chars") {
+      $tmpMaxChars = 0
+      if ([int]::TryParse([string]$http.max_input_chars, [ref]$tmpMaxChars) -and $tmpMaxChars -gt 0) {
+        $runtime.max_input_chars = $tmpMaxChars
+      }
+    }
+  }
+
+  return $runtime
+}
+
+function New-LanguageApiHttpEnvelope {
+  param(
+    [string]$RequestId,
+    [string]$SchemaVersion,
+    [string]$ProviderUsed,
+    [object]$Result
+  )
+
+  return [pscustomobject]@{
+    request_id = $RequestId
+    schema_version = $SchemaVersion
+    provider_used = $ProviderUsed
+    result = $Result
+  }
+}
+
+function Start-LanguageApiHttpService {
+  param([Parameter(Mandatory = $true)][object]$RuntimeConfig)
+
+  $prefix = "http://{0}:{1}/" -f $RuntimeConfig.host, $RuntimeConfig.port
+  $listener = New-Object System.Net.HttpListener
+  $listener.Prefixes.Add($prefix)
+  $listener.Start()
+  Write-Host ("LANGUAGE_API_HTTP_LISTENING={0}" -f $prefix)
+
+  try {
+    while ($listener.IsListening) {
+      $context = $listener.GetContext()
+      Handle-LanguageApiHttpRequest -Context $context -RuntimeConfig $RuntimeConfig
+    }
+  }
+  finally {
+    if ($listener.IsListening) {
+      $listener.Stop()
+    }
+    $listener.Close()
+  }
+}
+
+function Handle-LanguageApiHttpRequest {
+  param(
+    [Parameter(Mandatory = $true)][System.Net.HttpListenerContext]$Context,
+    [Parameter(Mandatory = $true)][object]$RuntimeConfig
+  )
+
+  $request = $Context.Request
+  $response = $Context.Response
+  $requestId = New-ApiRequestId
+  $method = ([string]$request.HttpMethod).ToUpperInvariant()
+  $path = [string]$request.Url.AbsolutePath
+  if ([string]::IsNullOrWhiteSpace($path)) { $path = "/" }
+  if ($path.Length -gt 1 -and $path.EndsWith("/")) { $path = $path.TrimEnd("/") }
+  if ([string]::IsNullOrWhiteSpace($path)) { $path = "/" }
+  $instance = "{0} {1}" -f $method, $path
+  $endpoint = $instance
+
+  $startedAt = Get-ApiUtcNow
+  $statusCode = 500
+  $keyId = "anonymous"
+  $requestBytes = 0
+  $responseBytes = 0
+  $idempotencyReplay = $false
+  $billableUnits = 0
+
+  try {
+    $response.AddHeader("X-Request-Id", $requestId)
+
+    if ($method -eq "GET" -and ($path -eq "/health" -or $path -eq "/ready")) {
+      $healthPayload = Get-LanguageApiHealthPayload
+      $body = [pscustomobject]@{
+        request_id = $requestId
+        schema_version = $RuntimeConfig.schema_version
+        provider_used = "local"
+        result = $healthPayload
+      }
+      $json = $body | ConvertTo-Json -Depth 20 -Compress
+      $statusCode = 200
+      $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+      Write-HttpRawResponse -Response $response -StatusCode 200 -Body $json -ContentType "application/json"
+      return
+    }
+
+    $providedKey = [string]$request.Headers["X-API-Key"]
+    $principal = Get-ApiKeyPrincipal -HttpConfig $RuntimeConfig -ProvidedKey $providedKey
+    if ($null -eq $principal) {
+      $statusCode = 401
+      Write-HttpProblemResponse -Response $response -Status 401 -Title "Unauthorized" -Detail "Missing or invalid X-API-Key." -Instance $instance -RequestId $requestId
+      return
+    }
+    $keyId = [string]$principal.key_id
+
+    $rate = Test-ApiRequestAllowedByRateLimit `
+      -ServiceName $RuntimeConfig.service_name `
+      -KeyId $keyId `
+      -Endpoint $endpoint `
+      -WindowSeconds ([int]$RuntimeConfig.rate_limit_window_seconds) `
+      -MaxRequests ([int]$RuntimeConfig.rate_limit_max_requests)
+    if (-not [bool]$rate.allowed) {
+      $response.AddHeader("Retry-After", [string]([int]$RuntimeConfig.rate_limit_window_seconds))
+      $statusCode = 429
+      Write-HttpProblemResponse -Response $response -Status 429 -Title "Too Many Requests" -Detail "Rate limit exceeded for this API key and endpoint window." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    if ($method -eq "GET" -and $path -eq "/v1/admin/usage") {
+      if ([string]$principal.role -ne "admin") {
+        $statusCode = 403
+        Write-HttpProblemResponse -Response $response -Status 403 -Title "Forbidden" -Detail "Admin role is required for usage export." -Instance $instance -RequestId $requestId
+        return
+      }
+
+      $query = Get-HttpQueryParameters -Request $request
+      $fromUtc = [datetime]::MinValue
+      $toUtc = [datetime]::MinValue
+      $hasFrom = $false
+      $hasTo = $false
+      if ($query.ContainsKey("from") -and -not [string]::IsNullOrWhiteSpace([string]$query["from"])) {
+        if (-not [datetime]::TryParse([string]$query["from"], [ref]$fromUtc)) {
+          $statusCode = 400
+          Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "Query parameter 'from' must be ISO8601 datetime." -Instance $instance -RequestId $requestId
+          return
+        }
+        $hasFrom = $true
+      }
+      if ($query.ContainsKey("to") -and -not [string]::IsNullOrWhiteSpace([string]$query["to"])) {
+        if (-not [datetime]::TryParse([string]$query["to"], [ref]$toUtc)) {
+          $statusCode = 400
+          Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "Query parameter 'to' must be ISO8601 datetime." -Instance $instance -RequestId $requestId
+          return
+        }
+        $hasTo = $true
+      }
+
+      $usageRows = if ($hasFrom -and $hasTo) {
+        Get-UsageLedgerEntries -LedgerPath ([string]$RuntimeConfig.usage_ledger_path) -FromUtc $fromUtc -ToUtc $toUtc
+      }
+      elseif ($hasFrom) {
+        Get-UsageLedgerEntries -LedgerPath ([string]$RuntimeConfig.usage_ledger_path) -FromUtc $fromUtc
+      }
+      elseif ($hasTo) {
+        Get-UsageLedgerEntries -LedgerPath ([string]$RuntimeConfig.usage_ledger_path) -ToUtc $toUtc
+      }
+      else {
+        Get-UsageLedgerEntries -LedgerPath ([string]$RuntimeConfig.usage_ledger_path)
+      }
+
+      $payload = [pscustomobject]@{
+        request_id = $requestId
+        schema_version = $RuntimeConfig.schema_version
+        provider_used = "local"
+        result = [pscustomobject]@{
+          count = @($usageRows).Count
+          rows = @($usageRows)
+        }
+      }
+      $json = $payload | ConvertTo-Json -Depth 20 -Compress
+      $statusCode = 200
+      $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+      Write-HttpRawResponse -Response $response -StatusCode 200 -Body $json -ContentType "application/json"
+      return
+    }
+
+    if ($method -ne "POST") {
+      $statusCode = 405
+      Write-HttpProblemResponse -Response $response -Status 405 -Title "Method Not Allowed" -Detail "Only POST is supported for this endpoint." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    if ($path -notin @("/v1/language/detect", "/v1/language/translate")) {
+      $statusCode = 404
+      Write-HttpProblemResponse -Response $response -Status 404 -Title "Not Found" -Detail "Endpoint not found." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    $rawBody = Read-HttpRequestBodyText -Request $request -MaxBytes ([int]$RuntimeConfig.max_request_bytes)
+    $requestBytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$rawBody)
+    if ([string]::IsNullOrWhiteSpace($rawBody)) {
+      $statusCode = 400
+      Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "Request body must be valid JSON and non-empty." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    $idempotencyKey = [string]$request.Headers["Idempotency-Key"]
+    $bodyHash = Get-Sha256Hex -Text $rawBody
+    if (-not [string]::IsNullOrWhiteSpace($idempotencyKey)) {
+      $decision = Get-IdempotencyReplayDecision `
+        -ServiceName $RuntimeConfig.service_name `
+        -KeyId $keyId `
+        -Endpoint $endpoint `
+        -IdempotencyKey $idempotencyKey `
+        -BodyHash $bodyHash `
+        -TtlSeconds ([int]$RuntimeConfig.idempotency_ttl_seconds)
+      if ([bool]$decision.conflict) {
+        $statusCode = 409
+        Write-HttpProblemResponse -Response $response -Status 409 -Title "Conflict" -Detail "Idempotency-Key was reused with a different request body." -Instance $instance -RequestId $requestId
+        return
+      }
+      if ([bool]$decision.replay) {
+        $response.AddHeader("Idempotency-Replayed", "true")
+        $statusCode = [int]$decision.entry.status_code
+        $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$decision.entry.json_body)
+        $idempotencyReplay = $true
+        Write-HttpRawResponse -Response $response -StatusCode $statusCode -Body ([string]$decision.entry.json_body) -ContentType ([string]$decision.entry.content_type)
+        return
+      }
+    }
+
+    $body = ConvertFrom-JsonSafe -Raw $rawBody -Label "Language API request body"
+
+    $inputText = if ($body.PSObject.Properties.Name -contains "input_text") { [string]$body.input_text } else { "" }
+    $sourceChannel = if ($body.PSObject.Properties.Name -contains "source_channel") { [string]$body.source_channel } else { "" }
+    $sourceLanguage = if ($body.PSObject.Properties.Name -contains "source_language") { [string]$body.source_language } else { "" }
+    $targetLanguage = if ($body.PSObject.Properties.Name -contains "target_language") { [string]$body.target_language } else { "" }
+    $mode = if ($path -eq "/v1/language/translate") { "convert" } else { "detect" }
+    if ($body.PSObject.Properties.Name -contains "mode" -and -not [string]::IsNullOrWhiteSpace([string]$body.mode)) {
+      $mode = [string]$body.mode
+    }
+
+    if ([string]::IsNullOrWhiteSpace($inputText)) {
+      $statusCode = 400
+      Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "input_text is required." -Instance $instance -RequestId $requestId
+      return
+    }
+    if ($inputText.Length -gt [int]$RuntimeConfig.max_input_chars) {
+      $statusCode = 413
+      Write-HttpProblemResponse -Response $response -Status 413 -Title "Payload Too Large" -Detail "input_text exceeds max_input_chars limit." -Instance $instance -RequestId $requestId
+      return
+    }
+    if ([string]::IsNullOrWhiteSpace($sourceChannel)) {
+      $statusCode = 400
+      Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "source_channel is required." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    $supportedLanguages = @(Get-SupportedLanguageCodes)
+    if (-not [string]::IsNullOrWhiteSpace($sourceLanguage)) {
+      $normalizedSource = Normalize-LanguageCode -Value $sourceLanguage
+      if ($normalizedSource -ne "und" -and ($supportedLanguages -notcontains $normalizedSource)) {
+        $statusCode = 400
+        Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "source_language must be one of: $($supportedLanguages -join ', '), or omitted." -Instance $instance -RequestId $requestId
+        return
+      }
+    }
+
+    if ($path -eq "/v1/language/translate") {
+      if ([string]::IsNullOrWhiteSpace($targetLanguage)) {
+        $statusCode = 400
+        Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "target_language is required for /v1/language/translate." -Instance $instance -RequestId $requestId
+        return
+      }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($targetLanguage)) {
+      $normalizedTarget = Normalize-LanguageCode -Value $targetLanguage
+      if ($supportedLanguages -notcontains $normalizedTarget) {
+        $statusCode = 400
+        Write-HttpProblemResponse -Response $response -Status 400 -Title "Bad Request" -Detail "target_language must be one of: $($supportedLanguages -join ', ')." -Instance $instance -RequestId $requestId
+        return
+      }
+      $targetLanguage = $normalizedTarget
+    }
+
+    $resultStarted = Get-ApiUtcNow
+    $result = Invoke-LanguageApi `
+      -Text $inputText `
+      -Channel $sourceChannel `
+      -Mode $mode `
+      -SourceLanguage $sourceLanguage `
+      -TargetLanguage $targetLanguage
+    $resultElapsed = [int]((Get-ApiUtcNow) - $resultStarted).TotalMilliseconds
+    if ($resultElapsed -gt [int]$RuntimeConfig.request_timeout_ms) {
+      $statusCode = 504
+      Write-HttpProblemResponse -Response $response -Status 504 -Title "Gateway Timeout" -Detail "Request processing exceeded timeout window." -Instance $instance -RequestId $requestId
+      return
+    }
+
+    $payload = New-LanguageApiHttpEnvelope -RequestId $requestId -SchemaVersion ([string]$RuntimeConfig.schema_version) -ProviderUsed "local" -Result $result
+    $json = $payload | ConvertTo-Json -Depth 20 -Compress
+    $statusCode = 200
+    $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+    Write-HttpRawResponse -Response $response -StatusCode 200 -Body $json -ContentType "application/json"
+
+    if (-not [string]::IsNullOrWhiteSpace($idempotencyKey)) {
+      Save-IdempotencyResponse `
+        -ServiceName $RuntimeConfig.service_name `
+        -KeyId $keyId `
+        -Endpoint $endpoint `
+        -IdempotencyKey $idempotencyKey `
+        -BodyHash $bodyHash `
+        -StatusCode 200 `
+        -ContentType "application/json" `
+        -JsonBody $json
+    }
+
+    $billableUnits = [Math]::Max(1, [int][Math]::Ceiling($inputText.Length / 500.0))
+  }
+  catch {
+    if ($statusCode -lt 400) {
+      $statusCode = 500
+      Write-HttpProblemResponse -Response $response -Status 500 -Title "Internal Server Error" -Detail $_.Exception.Message -Instance $instance -RequestId $requestId
+    }
+  }
+  finally {
+    $latencyMs = [int]((Get-ApiUtcNow) - $startedAt).TotalMilliseconds
+    Add-UsageLedgerEntry `
+      -LedgerPath ([string]$RuntimeConfig.usage_ledger_path) `
+      -ServiceName ([string]$RuntimeConfig.service_name) `
+      -RequestId $requestId `
+      -KeyId $keyId `
+      -Endpoint $endpoint `
+      -StatusCode $statusCode `
+      -LatencyMs $latencyMs `
+      -BillableUnits $billableUnits `
+      -RequestBytes $requestBytes `
+      -ResponseBytes $responseBytes `
+      -IdempotencyReplay $idempotencyReplay
+    $response.Close()
+  }
+}
+
 $isDotSourced = $MyInvocation.InvocationName -eq "."
 if (-not $isDotSourced) {
+  if ($Serve) {
+    $runtimeConfig = Get-LanguageApiRuntimeConfig
+    Start-LanguageApiHttpService -RuntimeConfig $runtimeConfig
+    exit 0
+  }
+
   if ($Health) {
     $healthPayload = Get-LanguageApiHealthPayload
     $healthJson = $healthPayload | ConvertTo-Json -Depth 20
