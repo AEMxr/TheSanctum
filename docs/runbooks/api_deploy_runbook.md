@@ -51,6 +51,7 @@ Place IIS/NGINX/Caddy in front of both APIs:
 
 ## Production Hardening Checklist
 - [ ] Replace default API keys with strong secrets; no default keys in runtime.
+- [ ] Prefer `key_sha256` entries in config for at-rest key protection (clear `key` remains supported for local dev).
 - [ ] Separate standard vs admin API keys.
 - [ ] Restrict `/v1/admin/usage` to admin keys and trusted networks.
 - [ ] Tune rate limits per key tier.

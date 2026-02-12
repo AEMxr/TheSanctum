@@ -176,7 +176,12 @@ function Get-ApiHttpConfig {
   $schemaVersion = $DefaultSchemaVersion
   $usageLedgerPath = $DefaultUsageLedgerPath
   $apiKeys = @(
-    [pscustomobject]@{ key_id = "dev-local"; key = "dev-local-key"; role = "admin" }
+    [pscustomobject]@{
+      key_id = "dev-local"
+      key = "dev-local-key"
+      key_sha256 = (Get-Sha256Hex -Text "dev-local-key")
+      role = "admin"
+    }
   )
 
   if ($null -ne $httpConfig) {
@@ -235,13 +240,30 @@ function Get-ApiHttpConfig {
       foreach ($entry in @($httpConfig.api_keys)) {
         if ($null -eq $entry) { continue }
         $keyId = ([string]$entry.key_id).Trim()
-        $keyValue = ([string]$entry.key).Trim()
+        $keyValue = ""
+        if ($entry.PSObject.Properties.Name -contains "key" -and -not [string]::IsNullOrWhiteSpace([string]$entry.key)) {
+          $keyValue = ([string]$entry.key).Trim()
+        }
+        $keyHash = ""
+        if ($entry.PSObject.Properties.Name -contains "key_sha256" -and -not [string]::IsNullOrWhiteSpace([string]$entry.key_sha256)) {
+          $keyHash = ([string]$entry.key_sha256).Trim().ToLowerInvariant()
+        }
+        elseif ($entry.PSObject.Properties.Name -contains "key_hash" -and -not [string]::IsNullOrWhiteSpace([string]$entry.key_hash)) {
+          $keyHash = ([string]$entry.key_hash).Trim().ToLowerInvariant()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($keyHash) -and ($keyHash -notmatch '^[0-9a-f]{64}$')) {
+          continue
+        }
+        if ([string]::IsNullOrWhiteSpace($keyHash) -and -not [string]::IsNullOrWhiteSpace($keyValue)) {
+          $keyHash = Get-Sha256Hex -Text $keyValue
+        }
         $role = ([string]$entry.role).Trim().ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($keyId) -or [string]::IsNullOrWhiteSpace($keyValue)) { continue }
+        if ([string]::IsNullOrWhiteSpace($keyId) -or ([string]::IsNullOrWhiteSpace($keyValue) -and [string]::IsNullOrWhiteSpace($keyHash))) { continue }
         if ($role -notin @("admin", "standard")) { $role = "standard" }
         [void]$normalized.Add([pscustomobject]@{
           key_id = $keyId
           key = $keyValue
+          key_sha256 = $keyHash
           role = $role
         })
       }
@@ -286,8 +308,21 @@ function Get-ApiKeyPrincipal {
     return $null
   }
 
+  $provided = [string]$ProvidedKey
+  $providedHash = Get-Sha256Hex -Text $provided
+
   foreach ($entry in @($HttpConfig.api_keys)) {
-    if ([string]$entry.key -ceq [string]$ProvidedKey) {
+    $entryKey = [string]$entry.key
+    $entryHash = ([string]$entry.key_sha256).Trim().ToLowerInvariant()
+    $matched = $false
+    if (-not [string]::IsNullOrWhiteSpace($entryKey) -and $entryKey -ceq $provided) {
+      $matched = $true
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($entryHash) -and $entryHash -eq $providedHash) {
+      $matched = $true
+    }
+
+    if ($matched) {
       return [pscustomobject]@{
         key_id = [string]$entry.key_id
         role = [string]$entry.role

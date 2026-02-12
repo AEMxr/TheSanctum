@@ -14,6 +14,7 @@
       {
         "key_id": "dev-local",
         "key": "dev-local-key",
+        "key_sha256": "3700285e3c8496a57e45eb1ccd43f2424852788576961320fbb31f86f17edb61",
         "role": "admin"
       }
     ],
