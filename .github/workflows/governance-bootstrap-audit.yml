@@ -1,0 +1,138 @@
+name: governance-bootstrap-audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      second_approver:
+        description: "Lowercase GitHub login expected in GOVERNANCE_APPROVERS"
+        required: true
+        type: string
+      pr_standard:
+        description: "Standard drill PR number"
+        required: true
+        default: "6"
+        type: string
+      pr_exception:
+        description: "Exception drill PR number"
+        required: true
+        default: "7"
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+      REPO: ${{ github.repository }}
+      SECOND: ${{ inputs.second_approver }}
+      PR_STANDARD: ${{ inputs.pr_standard }}
+      PR_EXCEPTION: ${{ inputs.pr_exception }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify token present
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "Missing secret GOVERNANCE_AUDIT_TOKEN"
+          }
+          gh --version
+          gh auth status
+
+      - name: Run governance bootstrap verifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+          $outDir = "artifacts/governance/bootstrap_audit_$stamp"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          function Assert-True([bool]$cond, [string]$msg) {
+            if (-not $cond) { throw "FAILED: $msg" }
+            Write-Host "OK: $msg"
+          }
+
+          # 1) Branch protection
+          $protectionJson = gh api "repos/$env:REPO/branches/main/protection"
+          $protectionJson | Set-Content -Path (Join-Path $outDir "main_protection.json") -Encoding UTF8
+          $protection = $protectionJson | ConvertFrom-Json
+
+          $contexts = @($protection.required_status_checks.contexts)
+          Assert-True ($contexts -contains "hardening-pr-gate") "required status check includes hardening-pr-gate"
+
+          $reviews = $protection.required_pull_request_reviews
+          Assert-True ($reviews.require_code_owner_reviews -eq $true) "code owner review required"
+          Assert-True ($reviews.dismiss_stale_reviews -eq $true) "dismiss stale approvals enabled"
+          Assert-True ($protection.required_conversation_resolution.enabled -eq $true) "conversation resolution required"
+
+          # 2) Governance approvers variable
+          $varJson = gh api "repos/$env:REPO/actions/variables/GOVERNANCE_APPROVERS"
+          $varJson | Set-Content -Path (Join-Path $outDir "governance_approvers.json") -Encoding UTF8
+          $approvers = (($varJson | ConvertFrom-Json).value -split ",") | ForEach-Object { $_.Trim().ToLower() }
+
+          Assert-True ($approvers -contains "aemxr") "GOVERNANCE_APPROVERS contains aemxr"
+          Assert-True ($approvers -contains $env:SECOND.ToLower()) "GOVERNANCE_APPROVERS contains $($env:SECOND.ToLower())"
+
+          # 3) PR drill snapshots
+          $pr6Json = gh pr view $env:PR_STANDARD --repo $env:REPO --json number,state,mergedAt,mergeCommit,reviewDecision,statusCheckRollup,url
+          $pr7Json = gh pr view $env:PR_EXCEPTION --repo $env:REPO --json number,state,mergedAt,mergeCommit,reviewDecision,statusCheckRollup,labels,url
+
+          $pr6Json | Set-Content -Path (Join-Path $outDir "pr$($env:PR_STANDARD).json") -Encoding UTF8
+          $pr7Json | Set-Content -Path (Join-Path $outDir "pr$($env:PR_EXCEPTION).json") -Encoding UTF8
+
+          $pr6 = $pr6Json | ConvertFrom-Json
+          $pr7 = $pr7Json | ConvertFrom-Json
+
+          Assert-True ($pr6.state -eq "MERGED") "PR #$($env:PR_STANDARD) merged"
+          Assert-True ($pr7.state -eq "MERGED") "PR #$($env:PR_EXCEPTION) merged"
+
+          $labels7 = @($pr7.labels | ForEach-Object { $_.name })
+          Assert-True ($labels7 -contains "override-governance-approved") "PR #$($env:PR_EXCEPTION) has override-governance-approved label"
+
+          function Test-GatePass($rollup) {
+            $gate = $rollup | Where-Object {
+              ($_.name -eq "enforce-hardening-gate" -or $_.context -eq "hardening-pr-gate") -and $_.conclusion -eq "SUCCESS"
+            }
+            return ($null -ne $gate)
+          }
+
+          Assert-True (Test-GatePass $pr6.statusCheckRollup) "PR #$($env:PR_STANDARD) hardening-pr-gate passed"
+          Assert-True (Test-GatePass $pr7.statusCheckRollup) "PR #$($env:PR_EXCEPTION) hardening-pr-gate passed"
+
+          # 4) Recent runs
+          $runs = gh run list --repo $env:REPO --workflow hardening-pr-gate --limit 5 --json databaseId,conclusion,displayTitle,headBranch,createdAt,url
+          $runs | Set-Content -Path (Join-Path $outDir "hardening_pr_gate_runs.json") -Encoding UTF8
+
+          # 5) Audit note
+          $note = @"
+          Governance bootstrap complete:
+          - second approver onboarded
+          - CODEOWNERS updated
+          - GOVERNANCE_APPROVERS set to: aemxr,$($env:SECOND.ToLower())
+          - standard and exception drills both passed and merged
+          - branch protection verified active with required hardening-pr-gate
+
+          Evidence:
+          - $outDir/main_protection.json
+          - $outDir/governance_approvers.json
+          - $outDir/pr$($env:PR_STANDARD).json
+          - $outDir/pr$($env:PR_EXCEPTION).json
+          - $outDir/hardening_pr_gate_runs.json
+          "@
+
+          $notePath = Join-Path $outDir "audit_note.md"
+          $note | Set-Content -Path $notePath -Encoding UTF8
+          Write-Host "ALL CHECKS PASSED"
+          Write-Host "AUDIT_NOTE=$notePath"
+
+      - name: Upload audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-bootstrap-audit
+          path: artifacts/governance/**
