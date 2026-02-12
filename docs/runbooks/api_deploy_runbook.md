@@ -55,10 +55,21 @@ Place IIS/NGINX/Caddy in front of both APIs:
 - [ ] Separate standard vs admin API keys.
 - [ ] Restrict `/v1/admin/usage` to admin keys and trusted networks.
 - [ ] Tune rate limits per key tier.
+- [ ] Set `http.state_backend` to `file` and configure a durable `http.shared_state_path` per service for multi-process consistency.
 - [ ] Tune request body limits and timeouts per environment.
 - [ ] Store usage ledgers on durable storage with log rotation.
 - [ ] Run smoke and integration suites before deployment.
 - [ ] Enable centralized log shipping for response status and latency.
+
+## Shared State + Outage Mode
+- `http.state_backend` supports `memory` (default) and `file`.
+- For horizontal scale or multi-process hosts, use `file` with a shared durable path and filesystem locking support.
+- Current outage behavior:
+  - Rate limiting: **fail-closed** (request returns server error when shared state lock/read fails).
+  - Idempotency replay: **fail-closed** (request returns server error when shared state lock/read/write fails).
+- Follow-up hardening:
+  - Introduce explicit per-endpoint fail-open/fail-closed toggles if business policy requires degraded-availability handling.
+- Keep shared state storage free of PII and rotate/backup based on retention policy.
 
 ## API Marketplace Readiness Checklist
 - [ ] OpenAPI specs published:

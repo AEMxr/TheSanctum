@@ -9,6 +9,10 @@ if (-not (Get-Variable -Name HttpIdempotencyStore -Scope Script -ErrorAction Sil
   $script:HttpIdempotencyStore = @{}
 }
 
+if (-not (Get-Variable -Name HttpStateConfigRegistry -Scope Script -ErrorAction SilentlyContinue)) {
+  $script:HttpStateConfigRegistry = @{}
+}
+
 function New-ApiRequestId {
   return [guid]::NewGuid().ToString("N")
 }
@@ -19,6 +23,248 @@ function Get-ApiUtcNow {
 
 function Get-ApiUnixEpochSeconds {
   return [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+}
+
+function ConvertTo-PlainHashtable {
+  param([object]$Value)
+
+  if ($null -eq $Value) { return $null }
+
+  if ($Value -is [hashtable]) {
+    $out = @{}
+    foreach ($k in $Value.Keys) {
+      $out[[string]$k] = ConvertTo-PlainHashtable -Value $Value[$k]
+    }
+    return $out
+  }
+
+  if ($Value -is [System.Collections.IDictionary]) {
+    $out = @{}
+    foreach ($k in $Value.Keys) {
+      $out[[string]$k] = ConvertTo-PlainHashtable -Value $Value[$k]
+    }
+    return $out
+  }
+
+  if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $Value) {
+      [void]$list.Add((ConvertTo-PlainHashtable -Value $item))
+    }
+    return @($list.ToArray())
+  }
+
+  if ($Value -is [pscustomobject]) {
+    $out = @{}
+    foreach ($p in $Value.PSObject.Properties) {
+      $out[[string]$p.Name] = ConvertTo-PlainHashtable -Value $p.Value
+    }
+    return $out
+  }
+
+  return $Value
+}
+
+function Get-ConfigFieldValue {
+  param(
+    [object]$Config,
+    [string]$FieldName
+  )
+
+  if ($null -eq $Config -or [string]::IsNullOrWhiteSpace($FieldName)) { return $null }
+
+  if ($Config -is [System.Collections.IDictionary]) {
+    foreach ($key in $Config.Keys) {
+      if ([string]::Equals([string]$key, [string]$FieldName, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $Config[$key]
+      }
+    }
+  }
+
+  if ($Config.PSObject.Properties.Name -contains $FieldName) {
+    return $Config.$FieldName
+  }
+
+  return $null
+}
+
+function Get-ApiStateBackendKind {
+  param([object]$HttpConfig)
+
+  if ($null -eq $HttpConfig) { return "memory" }
+  $backendValue = Get-ConfigFieldValue -Config $HttpConfig -FieldName "state_backend"
+  if (-not [string]::IsNullOrWhiteSpace([string]$backendValue)) {
+    return ([string]$backendValue).Trim().ToLowerInvariant()
+  }
+  return "memory"
+}
+
+function Get-ApiStatePath {
+  param(
+    [object]$HttpConfig,
+    [string]$ServiceName
+  )
+
+  $pathValue = Get-ConfigFieldValue -Config $HttpConfig -FieldName "shared_state_path"
+  if (-not [string]::IsNullOrWhiteSpace([string]$pathValue)) {
+    return ([string]$pathValue).Trim()
+  }
+
+  $safeService = if ([string]::IsNullOrWhiteSpace($ServiceName)) { "service" } else { ($ServiceName -replace '[^A-Za-z0-9_-]', '_') }
+  return (Join-Path ([System.IO.Path]::GetTempPath()) ("sanctum_{0}_shared_state.json" -f $safeService))
+}
+
+function Get-ApiStateScope {
+  param(
+    [object]$HttpConfig,
+    [string]$ServiceName
+  )
+
+  $effectiveConfig = $HttpConfig
+  if ($null -eq $effectiveConfig -and -not [string]::IsNullOrWhiteSpace($ServiceName)) {
+    $registryKey = ([string]$ServiceName).Trim()
+    if ($script:HttpStateConfigRegistry.ContainsKey($registryKey)) {
+      $effectiveConfig = $script:HttpStateConfigRegistry[$registryKey]
+    }
+  }
+
+  $scope = Get-ConfigFieldValue -Config $effectiveConfig -FieldName "shared_state_scope"
+  if ([string]::IsNullOrWhiteSpace([string]$scope)) {
+    $scope = Get-ConfigFieldValue -Config $effectiveConfig -FieldName "service_name"
+  }
+  if ([string]::IsNullOrWhiteSpace([string]$scope)) {
+    $scope = $ServiceName
+  }
+  if ([string]::IsNullOrWhiteSpace([string]$scope)) {
+    $scope = "service"
+  }
+  return ([string]$scope).Trim()
+}
+
+function Read-HttpSharedState {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  if (-not (Test-Path -Path $Path -PathType Leaf)) {
+    return [pscustomobject]@{
+      rate_limit = @{}
+      idempotency = @{}
+    }
+  }
+
+  $raw = Get-Content -Path $Path -Raw -Encoding UTF8
+  if ([string]::IsNullOrWhiteSpace($raw)) {
+    return [pscustomobject]@{
+      rate_limit = @{}
+      idempotency = @{}
+    }
+  }
+
+  $parsed = $raw | ConvertFrom-Json
+  $rateStore = @{}
+  $idemStore = @{}
+  if ($parsed.PSObject.Properties.Name -contains "rate_limit" -and $null -ne $parsed.rate_limit) {
+    $rateStore = ConvertTo-PlainHashtable -Value $parsed.rate_limit
+  }
+  if ($parsed.PSObject.Properties.Name -contains "idempotency" -and $null -ne $parsed.idempotency) {
+    $idemStore = ConvertTo-PlainHashtable -Value $parsed.idempotency
+  }
+
+  return [pscustomobject]@{
+    rate_limit = if ($rateStore -is [hashtable]) { $rateStore } else { @{} }
+    idempotency = if ($idemStore -is [hashtable]) { $idemStore } else { @{} }
+  }
+}
+
+function Write-HttpSharedState {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][hashtable]$RateStore,
+    [Parameter(Mandatory = $true)][hashtable]$IdemStore
+  )
+
+  $dir = Split-Path -Parent $Path
+  if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -Path $dir -PathType Container)) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  }
+
+  $payload = [ordered]@{
+    rate_limit = $RateStore
+    idempotency = $IdemStore
+  }
+  $payload | ConvertTo-Json -Depth 100 | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Invoke-HttpStateStoreOperation {
+  param(
+    [object]$HttpConfig,
+    [string]$ServiceName,
+    [Parameter(Mandatory = $true)][scriptblock]$Operation
+  )
+
+  $effectiveConfig = $HttpConfig
+  if ($null -eq $effectiveConfig -and -not [string]::IsNullOrWhiteSpace($ServiceName)) {
+    $registryKey = ([string]$ServiceName).Trim()
+    if ($script:HttpStateConfigRegistry.ContainsKey($registryKey)) {
+      $effectiveConfig = $script:HttpStateConfigRegistry[$registryKey]
+    }
+  }
+
+  $backend = Get-ApiStateBackendKind -HttpConfig $effectiveConfig
+  if ($backend -notin @("memory", "file")) {
+    throw "Unsupported state_backend '$backend'. Expected memory|file."
+  }
+
+  $debugStateEnabled = [string]::Equals([string][Environment]::GetEnvironmentVariable("SANCTUM_HTTP_DEBUG_STATE"), "1", [System.StringComparison]::OrdinalIgnoreCase)
+  if ($debugStateEnabled) {
+    $tmpDebugPath = [Environment]::GetEnvironmentVariable("SANCTUM_HTTP_DEBUG_STATE_PATH")
+    if ([string]::IsNullOrWhiteSpace($tmpDebugPath)) {
+      $tmpDebugPath = Join-Path ([System.IO.Path]::GetTempPath()) "sanctum_http_state_debug.log"
+    }
+    $tmpService = if ([string]::IsNullOrWhiteSpace($ServiceName)) { "service" } else { $ServiceName }
+    $tmpScope = Get-ApiStateScope -HttpConfig $effectiveConfig -ServiceName $tmpService
+    $tmpStatePath = Get-ApiStatePath -HttpConfig $effectiveConfig -ServiceName $tmpScope
+    $line = "{0} service={1} scope={2} backend={3} state_path={4}" -f (Get-ApiUtcNow.ToString("o")), $tmpService, $tmpScope, $backend, $tmpStatePath
+    Add-Content -Path $tmpDebugPath -Value $line -Encoding UTF8
+  }
+
+  if ($backend -eq "memory") {
+    return & $Operation $script:HttpRateLimitStore $script:HttpIdempotencyStore
+  }
+
+  $resolvedService = if ([string]::IsNullOrWhiteSpace($ServiceName)) {
+    $serviceValue = Get-ConfigFieldValue -Config $effectiveConfig -FieldName "service_name"
+    if (-not [string]::IsNullOrWhiteSpace([string]$serviceValue)) { [string]$serviceValue } else { "service" }
+  }
+  else {
+    $ServiceName
+  }
+  $scope = Get-ApiStateScope -HttpConfig $effectiveConfig -ServiceName $resolvedService
+  $statePath = Get-ApiStatePath -HttpConfig $effectiveConfig -ServiceName $scope
+  $mutexName = "Global\SanctumHttpState_{0}" -f ($scope -replace '[^A-Za-z0-9_]', '_')
+  $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+  $lockTaken = $false
+  try {
+    $lockTaken = $mutex.WaitOne([TimeSpan]::FromSeconds(15))
+    if (-not $lockTaken) {
+      throw "Timed out waiting for shared state lock: $mutexName"
+    }
+
+    $state = Read-HttpSharedState -Path $statePath
+    $rateStore = ConvertTo-PlainHashtable -Value $state.rate_limit
+    $idemStore = ConvertTo-PlainHashtable -Value $state.idempotency
+    if ($null -eq $rateStore -or -not ($rateStore -is [hashtable])) { $rateStore = @{} }
+    if ($null -eq $idemStore -or -not ($idemStore -is [hashtable])) { $idemStore = @{} }
+
+    $result = & $Operation $rateStore $idemStore
+    Write-HttpSharedState -Path $statePath -RateStore $rateStore -IdemStore $idemStore
+    return $result
+  }
+  finally {
+    if ($lockTaken) {
+      try { $mutex.ReleaseMutex() | Out-Null } catch {}
+    }
+    $mutex.Dispose()
+  }
 }
 
 function Get-Sha256Hex {
@@ -173,6 +419,10 @@ function Get-ApiHttpConfig {
   $rateLimitMaxRequests = 60
   $rateLimitWindowSeconds = 60
   $idempotencyTtlSeconds = 300
+  $stateBackend = "memory"
+  $sharedStateScope = if ([string]::IsNullOrWhiteSpace($ServiceName)) { "service" } else { ([string]$ServiceName).Trim() }
+  $safeServiceForPath = if ([string]::IsNullOrWhiteSpace($ServiceName)) { "service" } else { ($ServiceName -replace '[^A-Za-z0-9_-]', '_') }
+  $sharedStatePath = Join-Path ([System.IO.Path]::GetTempPath()) ("sanctum_{0}_shared_state.json" -f $safeServiceForPath)
   $schemaVersion = $DefaultSchemaVersion
   $usageLedgerPath = $DefaultUsageLedgerPath
   $apiKeys = @(
@@ -211,6 +461,18 @@ function Get-ApiHttpConfig {
       if ([int]::TryParse([string]$httpConfig.idempotency_ttl_seconds, [ref]$tmpTtl) -and $tmpTtl -gt 0) {
         $idempotencyTtlSeconds = $tmpTtl
       }
+    }
+    if ($httpConfig.PSObject.Properties.Name -contains "state_backend" -and -not [string]::IsNullOrWhiteSpace([string]$httpConfig.state_backend)) {
+      $tmpBackend = ([string]$httpConfig.state_backend).Trim().ToLowerInvariant()
+      if ($tmpBackend -in @("memory", "file")) {
+        $stateBackend = $tmpBackend
+      }
+    }
+    if ($httpConfig.PSObject.Properties.Name -contains "shared_state_path" -and -not [string]::IsNullOrWhiteSpace([string]$httpConfig.shared_state_path)) {
+      $sharedStatePath = ([string]$httpConfig.shared_state_path).Trim()
+    }
+    if ($httpConfig.PSObject.Properties.Name -contains "shared_state_scope" -and -not [string]::IsNullOrWhiteSpace([string]$httpConfig.shared_state_scope)) {
+      $sharedStateScope = ([string]$httpConfig.shared_state_scope).Trim()
     }
     if ($httpConfig.PSObject.Properties.Name -contains "schema_version" -and -not [string]::IsNullOrWhiteSpace([string]$httpConfig.schema_version)) {
       $schemaVersion = ([string]$httpConfig.schema_version).Trim()
@@ -283,7 +545,7 @@ function Get-ApiHttpConfig {
     }
   }
 
-  return [pscustomobject]@{
+  $runtime = [pscustomobject]@{
     service_name = $ServiceName
     host = $bindHost
     port = $port
@@ -292,10 +554,25 @@ function Get-ApiHttpConfig {
     rate_limit_max_requests = $rateLimitMaxRequests
     rate_limit_window_seconds = $rateLimitWindowSeconds
     idempotency_ttl_seconds = $idempotencyTtlSeconds
+    state_backend = $stateBackend
+    shared_state_path = $sharedStatePath
+    shared_state_scope = $sharedStateScope
     api_keys = @($apiKeys)
     usage_ledger_path = $usageLedgerPath
     schema_version = $schemaVersion
   }
+
+  $registryKey = if ([string]::IsNullOrWhiteSpace([string]$ServiceName)) { "" } else { ([string]$ServiceName).Trim() }
+  if (-not [string]::IsNullOrWhiteSpace($registryKey)) {
+    $script:HttpStateConfigRegistry[$registryKey] = [pscustomobject]@{
+      service_name = $registryKey
+      state_backend = [string]$runtime.state_backend
+      shared_state_path = [string]$runtime.shared_state_path
+      shared_state_scope = [string]$runtime.shared_state_scope
+    }
+  }
+
+  return $runtime
 }
 
 function Get-ApiKeyPrincipal {
@@ -339,64 +616,82 @@ function Test-ApiRequestAllowedByRateLimit {
     [Parameter(Mandatory = $true)][string]$KeyId,
     [Parameter(Mandatory = $true)][string]$Endpoint,
     [int]$WindowSeconds,
-    [int]$MaxRequests
+    [int]$MaxRequests,
+    [object]$HttpConfig = $null
   )
 
   if ($WindowSeconds -lt 1) { $WindowSeconds = 1 }
   if ($MaxRequests -lt 1) { $MaxRequests = 1 }
 
+  $scope = Get-ApiStateScope -HttpConfig $HttpConfig -ServiceName $ServiceName
   $now = Get-ApiUnixEpochSeconds
   $bucket = [int][Math]::Floor($now / $WindowSeconds)
-  $storeKey = "{0}|{1}|{2}|{3}" -f $ServiceName, $KeyId, $Endpoint, $bucket
+  $storeKey = "{0}|{1}|{2}|{3}" -f $scope, $KeyId, $Endpoint, $bucket
+  $backendUsed = Get-ApiStateBackendKind -HttpConfig $HttpConfig
 
-  $count = 0
-  if ($script:HttpRateLimitStore.ContainsKey($storeKey)) {
-    $count = [int]$script:HttpRateLimitStore[$storeKey]
+  $rateDecision = Invoke-HttpStateStoreOperation -HttpConfig $HttpConfig -ServiceName $ServiceName -Operation {
+    param([hashtable]$RateStore, [hashtable]$IdemStore)
+
+    $count = 0
+    if ($RateStore.ContainsKey($storeKey)) {
+      $count = [int]$RateStore[$storeKey]
+    }
+
+    $count++
+    $RateStore[$storeKey] = $count
+
+    $allowed = ($count -le $MaxRequests)
+    $remaining = [Math]::Max(0, ($MaxRequests - $count))
+    $resetEpoch = (($bucket + 1) * $WindowSeconds)
+
+    return [pscustomobject]@{
+      allowed = $allowed
+      remaining = $remaining
+      reset_epoch = $resetEpoch
+      observed_count = $count
+    }
   }
 
-  $count++
-  $script:HttpRateLimitStore[$storeKey] = $count
-
-  $allowed = ($count -le $MaxRequests)
-  $remaining = [Math]::Max(0, ($MaxRequests - $count))
-  $resetEpoch = (($bucket + 1) * $WindowSeconds)
-
-  return [pscustomobject]@{
-    allowed = $allowed
-    remaining = $remaining
-    reset_epoch = $resetEpoch
-    observed_count = $count
+  if ($rateDecision.PSObject.Properties.Name -notcontains "backend_used") {
+    $rateDecision | Add-Member -NotePropertyName backend_used -NotePropertyValue $backendUsed -Force
   }
+  return $rateDecision
 }
 
 function Remove-ExpiredIdempotencyEntries {
   param(
     [Parameter(Mandatory = $true)][string]$ServiceName,
-    [int]$TtlSeconds
+    [int]$TtlSeconds,
+    [object]$HttpConfig = $null
   )
 
   if ($TtlSeconds -lt 1) { $TtlSeconds = 1 }
-  $now = Get-ApiUnixEpochSeconds
+  $scope = Get-ApiStateScope -HttpConfig $HttpConfig -ServiceName $ServiceName
 
-  $prefix = "{0}|" -f $ServiceName
-  $keys = @($script:HttpIdempotencyStore.Keys)
-  foreach ($key in $keys) {
-    if (-not $key.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-      continue
-    }
+  Invoke-HttpStateStoreOperation -HttpConfig $HttpConfig -ServiceName $ServiceName -Operation {
+    param([hashtable]$RateStore, [hashtable]$IdemStore)
 
-    $entry = $script:HttpIdempotencyStore[$key]
-    if ($null -eq $entry) {
-      [void]$script:HttpIdempotencyStore.Remove($key)
-      continue
-    }
+    $now = Get-ApiUnixEpochSeconds
+    $prefix = "{0}|" -f $scope
+    $keys = @($IdemStore.Keys)
+    foreach ($key in $keys) {
+      if (-not $key.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        continue
+      }
 
-    $createdEpoch = 0
-    [void][int]::TryParse([string]$entry.created_epoch, [ref]$createdEpoch)
-    if (($now - $createdEpoch) -gt $TtlSeconds) {
-      [void]$script:HttpIdempotencyStore.Remove($key)
+      $entry = $IdemStore[$key]
+      if ($null -eq $entry) {
+        [void]$IdemStore.Remove($key)
+        continue
+      }
+
+      $createdEpoch = 0
+      [void][int]::TryParse([string]$entry.created_epoch, [ref]$createdEpoch)
+      if (($now - $createdEpoch) -gt $TtlSeconds) {
+        [void]$IdemStore.Remove($key)
+      }
     }
-  }
+  } | Out-Null
 }
 
 function Get-IdempotencyReplayDecision {
@@ -406,22 +701,45 @@ function Get-IdempotencyReplayDecision {
     [Parameter(Mandatory = $true)][string]$Endpoint,
     [Parameter(Mandatory = $true)][string]$IdempotencyKey,
     [Parameter(Mandatory = $true)][string]$BodyHash,
-    [int]$TtlSeconds
+    [int]$TtlSeconds,
+    [object]$HttpConfig = $null
   )
 
-  Remove-ExpiredIdempotencyEntries -ServiceName $ServiceName -TtlSeconds $TtlSeconds
+  if ($TtlSeconds -lt 1) { $TtlSeconds = 1 }
+  $scope = Get-ApiStateScope -HttpConfig $HttpConfig -ServiceName $ServiceName
+  $storeKey = "{0}|{1}|{2}|{3}" -f $scope, $KeyId, $Endpoint, $IdempotencyKey
 
-  $storeKey = "{0}|{1}|{2}|{3}" -f $ServiceName, $KeyId, $Endpoint, $IdempotencyKey
-  if (-not $script:HttpIdempotencyStore.ContainsKey($storeKey)) {
-    return [pscustomobject]@{ has_entry = $false; replay = $false; conflict = $false; entry = $null }
+  return Invoke-HttpStateStoreOperation -HttpConfig $HttpConfig -ServiceName $ServiceName -Operation {
+    param([hashtable]$RateStore, [hashtable]$IdemStore)
+
+    $now = Get-ApiUnixEpochSeconds
+    $prefix = "{0}|" -f $scope
+    $keys = @($IdemStore.Keys)
+    foreach ($key in $keys) {
+      if (-not $key.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+      $entryCandidate = $IdemStore[$key]
+      if ($null -eq $entryCandidate) {
+        [void]$IdemStore.Remove($key)
+        continue
+      }
+      $createdEpochCandidate = 0
+      [void][int]::TryParse([string]$entryCandidate.created_epoch, [ref]$createdEpochCandidate)
+      if (($now - $createdEpochCandidate) -gt $TtlSeconds) {
+        [void]$IdemStore.Remove($key)
+      }
+    }
+
+    if (-not $IdemStore.ContainsKey($storeKey)) {
+      return [pscustomobject]@{ has_entry = $false; replay = $false; conflict = $false; entry = $null }
+    }
+
+    $entry = $IdemStore[$storeKey]
+    if ([string]$entry.body_hash -ne [string]$BodyHash) {
+      return [pscustomobject]@{ has_entry = $true; replay = $false; conflict = $true; entry = $entry }
+    }
+
+    return [pscustomobject]@{ has_entry = $true; replay = $true; conflict = $false; entry = $entry }
   }
-
-  $entry = $script:HttpIdempotencyStore[$storeKey]
-  if ([string]$entry.body_hash -ne [string]$BodyHash) {
-    return [pscustomobject]@{ has_entry = $true; replay = $false; conflict = $true; entry = $entry }
-  }
-
-  return [pscustomobject]@{ has_entry = $true; replay = $true; conflict = $false; entry = $entry }
 }
 
 function Save-IdempotencyResponse {
@@ -433,17 +751,22 @@ function Save-IdempotencyResponse {
     [Parameter(Mandatory = $true)][string]$BodyHash,
     [Parameter(Mandatory = $true)][int]$StatusCode,
     [Parameter(Mandatory = $true)][string]$ContentType,
-    [Parameter(Mandatory = $true)][string]$JsonBody
+    [Parameter(Mandatory = $true)][string]$JsonBody,
+    [object]$HttpConfig = $null
   )
 
-  $storeKey = "{0}|{1}|{2}|{3}" -f $ServiceName, $KeyId, $Endpoint, $IdempotencyKey
-  $script:HttpIdempotencyStore[$storeKey] = [pscustomobject]@{
-    body_hash = $BodyHash
-    status_code = $StatusCode
-    content_type = $ContentType
-    json_body = $JsonBody
-    created_epoch = Get-ApiUnixEpochSeconds
-  }
+  $scope = Get-ApiStateScope -HttpConfig $HttpConfig -ServiceName $ServiceName
+  $storeKey = "{0}|{1}|{2}|{3}" -f $scope, $KeyId, $Endpoint, $IdempotencyKey
+  Invoke-HttpStateStoreOperation -HttpConfig $HttpConfig -ServiceName $ServiceName -Operation {
+    param([hashtable]$RateStore, [hashtable]$IdemStore)
+    $IdemStore[$storeKey] = [pscustomobject]@{
+      body_hash = $BodyHash
+      status_code = $StatusCode
+      content_type = $ContentType
+      json_body = $JsonBody
+      created_epoch = Get-ApiUnixEpochSeconds
+    }
+  } | Out-Null
 }
 
 function Add-UsageLedgerEntry {
