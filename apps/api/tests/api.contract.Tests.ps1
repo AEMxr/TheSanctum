@@ -148,6 +148,90 @@ Describe "language detection API contract" {
     }
   }
 
+  Context "api key hash auth behavior" {
+    It "authenticates hash-only key entries" {
+      $hashOnlyKey = "hash-only-auth-key"
+      $hash = Get-Sha256Hex -Text $hashOnlyKey
+      $configObject = [pscustomobject]@{
+        http = [pscustomobject]@{
+          api_keys = @(
+            [pscustomobject]@{
+              key_id = "hash-only-admin"
+              key_sha256 = $hash
+              role = "admin"
+            }
+          )
+        }
+      }
+
+      $runtime = Get-ApiHttpConfig `
+        -ServiceName "language_api_hash_only_test" `
+        -ConfigObject $configObject `
+        -DefaultPort 18081 `
+        -DefaultUsageLedgerPath "apps/api/artifacts/usage/language_api_usage.hash_only_test.jsonl" `
+        -DefaultSchemaVersion "language-api-http-v1"
+
+      $principal = Get-ApiKeyPrincipal -HttpConfig $runtime -ProvidedKey $hashOnlyKey
+      Assert-True -Condition ($null -ne $principal) -Message "Hash-only API key should resolve a principal."
+      Assert-Equal -Actual ([string]$principal.key_id) -Expected "hash-only-admin" -Message "Hash-only key_id mismatch."
+      Assert-Equal -Actual ([string]$principal.role) -Expected "admin" -Message "Hash-only role mismatch."
+    }
+
+    It "rejects malformed key_sha256 entries" {
+      $configObject = [pscustomobject]@{
+        http = [pscustomobject]@{
+          api_keys = @(
+            [pscustomobject]@{
+              key_id = "bad-hash-entry"
+              key = "bad-hash-clear-key"
+              key_sha256 = "not-a-valid-sha256-value"
+              role = "admin"
+            }
+          )
+        }
+      }
+
+      $runtime = Get-ApiHttpConfig `
+        -ServiceName "language_api_bad_hash_test" `
+        -ConfigObject $configObject `
+        -DefaultPort 18081 `
+        -DefaultUsageLedgerPath "apps/api/artifacts/usage/language_api_usage.bad_hash_test.jsonl" `
+        -DefaultSchemaVersion "language-api-http-v1"
+
+      $configuredKeyIds = @($runtime.api_keys | ForEach-Object { [string]$_.key_id })
+      Assert-True -Condition (-not ($configuredKeyIds -contains "bad-hash-entry")) -Message "Malformed key_sha256 entry must be rejected from normalized config."
+
+      $principal = Get-ApiKeyPrincipal -HttpConfig $runtime -ProvidedKey "bad-hash-clear-key"
+      Assert-Equal -Actual $principal -Expected $null -Message "Malformed key_sha256 entry must not authenticate."
+    }
+
+    It "does not authenticate wrong clear key against hash-only entry" {
+      $validKey = "equal-length-key-01"
+      $wrongKey = "equal-length-key-99"
+      $configObject = [pscustomobject]@{
+        http = [pscustomobject]@{
+          api_keys = @(
+            [pscustomobject]@{
+              key_id = "hash-only-standard"
+              key_sha256 = (Get-Sha256Hex -Text $validKey)
+              role = "standard"
+            }
+          )
+        }
+      }
+
+      $runtime = Get-ApiHttpConfig `
+        -ServiceName "language_api_wrong_key_test" `
+        -ConfigObject $configObject `
+        -DefaultPort 18081 `
+        -DefaultUsageLedgerPath "apps/api/artifacts/usage/language_api_usage.wrong_key_test.jsonl" `
+        -DefaultSchemaVersion "language-api-http-v1"
+
+      $principal = Get-ApiKeyPrincipal -HttpConfig $runtime -ProvidedKey $wrongKey
+      Assert-Equal -Actual $principal -Expected $null -Message "Wrong clear key must not authenticate against hash-only entry."
+    }
+  }
+
   Context "runtime health contract" {
     It "returns deterministic health payload shape with readiness keys" {
       $health = Get-LanguageApiHealthPayload
