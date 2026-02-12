@@ -6,6 +6,9 @@
     "max_request_bytes": 65536,
     "request_timeout_ms": 15000,
     "idempotency_ttl_seconds": 300,
+    "state_backend": "memory",
+    "shared_state_path": "artifacts/runtime/language_api_shared_state.json",
+    "shared_state_scope": "language_api",
     "rate_limit": {
       "max_requests": 60,
       "window_seconds": 60

@@ -510,6 +510,9 @@ function Handle-LanguageApiHttpRequest {
 
     if ($method -eq "GET" -and ($path -eq "/health" -or $path -eq "/ready")) {
       $healthPayload = Get-LanguageApiHealthPayload
+      $healthPayload | Add-Member -NotePropertyName state_backend -NotePropertyValue ([string]$RuntimeConfig.state_backend) -Force
+      $healthPayload | Add-Member -NotePropertyName state_path -NotePropertyValue ([string]$RuntimeConfig.shared_state_path) -Force
+      $healthPayload | Add-Member -NotePropertyName state_scope -NotePropertyValue ([string]$RuntimeConfig.shared_state_scope) -Force
       $body = [pscustomobject]@{
         request_id = $requestId
         schema_version = $RuntimeConfig.schema_version
@@ -537,7 +540,12 @@ function Handle-LanguageApiHttpRequest {
       -KeyId $keyId `
       -Endpoint $endpoint `
       -WindowSeconds ([int]$RuntimeConfig.rate_limit_window_seconds) `
-      -MaxRequests ([int]$RuntimeConfig.rate_limit_max_requests)
+      -MaxRequests ([int]$RuntimeConfig.rate_limit_max_requests) `
+      -HttpConfig $RuntimeConfig
+    $response.AddHeader("X-Rate-Observed-Count", [string]$rate.observed_count)
+    if ($rate.PSObject.Properties.Name -contains "backend_used") {
+      $response.AddHeader("X-Rate-Limit-Backend", [string]$rate.backend_used)
+    }
     if (-not [bool]$rate.allowed) {
       $response.AddHeader("Retry-After", [string]([int]$RuntimeConfig.rate_limit_window_seconds))
       $statusCode = 429
@@ -632,7 +640,8 @@ function Handle-LanguageApiHttpRequest {
         -Endpoint $endpoint `
         -IdempotencyKey $idempotencyKey `
         -BodyHash $bodyHash `
-        -TtlSeconds ([int]$RuntimeConfig.idempotency_ttl_seconds)
+        -TtlSeconds ([int]$RuntimeConfig.idempotency_ttl_seconds) `
+        -HttpConfig $RuntimeConfig
       if ([bool]$decision.conflict) {
         $statusCode = 409
         Write-HttpProblemResponse -Response $response -Status 409 -Title "Conflict" -Detail "Idempotency-Key was reused with a different request body." -Instance $instance -RequestId $requestId
@@ -731,16 +740,18 @@ function Handle-LanguageApiHttpRequest {
         -BodyHash $bodyHash `
         -StatusCode 200 `
         -ContentType "application/json" `
-        -JsonBody $json
+        -JsonBody $json `
+        -HttpConfig $RuntimeConfig
     }
 
     $billableUnits = [Math]::Max(1, [int][Math]::Ceiling($inputText.Length / 500.0))
   }
   catch {
-    if ($statusCode -lt 400) {
-      $statusCode = 500
+    $statusCode = 500
+    try {
       Write-HttpProblemResponse -Response $response -Status 500 -Title "Internal Server Error" -Detail $_.Exception.Message -Instance $instance -RequestId $requestId
     }
+    catch {}
   }
   finally {
     $latencyMs = [int]((Get-ApiUtcNow) - $startedAt).TotalMilliseconds
