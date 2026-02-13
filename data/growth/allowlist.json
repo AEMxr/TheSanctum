@@ -1,0 +1,34 @@
+{
+  "channels": [
+    {
+      "channel": "x",
+      "autopost_allowed": true,
+      "requires_human_review": false,
+      "posting_rate_limit_per_day": 3,
+      "policy_confidence": 0.95,
+      "required_disclosures": [
+        "Sponsored content. Reply STOP to opt out."
+      ]
+    },
+    {
+      "channel": "discourse",
+      "autopost_allowed": true,
+      "requires_human_review": false,
+      "posting_rate_limit_per_day": 2,
+      "policy_confidence": 0.9,
+      "required_disclosures": [
+        "Forum rules respected; promotional disclosure included."
+      ]
+    },
+    {
+      "channel": "reddit",
+      "autopost_allowed": false,
+      "requires_human_review": true,
+      "posting_rate_limit_per_day": 1,
+      "policy_confidence": 0.85,
+      "required_disclosures": [
+        "Manual moderator-approved post required."
+      ]
+    }
+  ]
+}

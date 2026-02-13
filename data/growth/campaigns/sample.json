@@ -1,0 +1,26 @@
+{
+  "campaign_id": "sample",
+  "name": "Sample multilingual growth pilot",
+  "keywords": [
+    "lead response automation",
+    "inbox triage workflow",
+    "meeting followup systems"
+  ],
+  "target_languages": [
+    "en",
+    "es",
+    "fr"
+  ],
+  "discovery_seed_channels": [
+    "x",
+    "discourse",
+    "reddit",
+    "community_forum_unknown"
+  ],
+  "tone": "professional",
+  "daily_budget_usd": 60,
+  "max_posts_per_day": 4,
+  "cost_per_post_usd": 3,
+  "estimated_sale_value_usd": 120,
+  "landing_url": "https://example.com/pilot"
+}
