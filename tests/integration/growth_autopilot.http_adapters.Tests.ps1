@@ -84,26 +84,16 @@ function Invoke-AdapterPublishWithServerPlan {
   $server = Start-TestHttpListener
   $endpoint = [string]$server.endpoint
 
-  $job = Start-Job -ArgumentList @($LibPath, $endpoint, $MaxAttempts, $HttpTimeoutSec, @($RetryScheduleMs)) -ScriptBlock {
-    param($InnerLibPath, $InnerEndpoint, $InnerMaxAttempts, $InnerTimeoutSec, $InnerRetrySchedule)
+  $assertPath = Join-Path $PSScriptRoot "growth_autopilot.test_assert_utils.ps1"
+
+  $job = Start-Job -ArgumentList @($LibPath, $assertPath, $endpoint, $MaxAttempts, $HttpTimeoutSec, @($RetryScheduleMs)) -ScriptBlock {
+    param($InnerLibPath, $InnerAssertPath, $InnerEndpoint, $InnerMaxAttempts, $InnerTimeoutSec, $InnerRetrySchedule)
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     try { [System.Net.ServicePointManager]::Expect100Continue = $false } catch {}
 
-    function Get-StableHash {
-      param([Parameter(Mandatory = $true)][string]$Value)
-      $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
-      $sha = [System.Security.Cryptography.SHA256]::Create()
-      try {
-        $hashBytes = $sha.ComputeHash($bytes)
-        return (($hashBytes | ForEach-Object { $_.ToString("x2") }) -join "")
-      }
-      finally {
-        $sha.Dispose()
-      }
-    }
-
+    . $InnerAssertPath
     . $InnerLibPath
 
     $env:SANCTUM_GROWTH_X_ENDPOINT = $InnerEndpoint
