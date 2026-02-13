@@ -1,3 +1,8 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$script:GrowthAutopilotReceiptSchemaVersion = "v1.0.0"
+
 function Get-GrowthAutopilotAdapterRegistry {
   # Returns a deterministic registry mapping channel -> adapter name.
   return @{
@@ -30,6 +35,38 @@ function Split-GrowthCsv {
       Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
       Select-Object -Unique
   )
+}
+
+function Redact-GrowthSecretText {
+  param([string]$Text)
+
+  if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
+
+  # Remove any accidental bearer tokens or URL strings from error messages.
+  $t = [string]$Text
+  $t = [regex]::Replace($t, '(?i)Bearer\\s+[A-Za-z0-9._\\-]+', 'Bearer <redacted>')
+  $t = [regex]::Replace($t, 'https?://[^\\s\\\"\\)\\]]+', '<redacted_url>')
+  return $t
+}
+
+function Test-GrowthHttpTimeoutException {
+  param([Exception]$Exception)
+
+  $e = $Exception
+  for ($i = 0; $i -lt 8 -and $null -ne $e; $i++) {
+    if ($e -is [System.Net.WebException]) {
+      try {
+        if ($e.Status -eq [System.Net.WebExceptionStatus]::Timeout) { return $true }
+      } catch {}
+    }
+    if ($e -is [System.TimeoutException]) { return $true }
+    if ($e -is [System.Threading.Tasks.TaskCanceledException]) { return $true }
+    $e = $e.InnerException
+  }
+
+  $msg = [string]$Exception.Message
+  if ($msg -match '(?i)time(d)?\\s*out|timeout') { return $true }
+  return $false
 }
 
 function New-GrowthAutopilotAdapterRequest {
@@ -106,7 +143,8 @@ function Invoke-GrowthAutopilotMockPublish {
 function Invoke-GrowthAutopilotHttpPublish {
   param(
     [Parameter(Mandatory = $true)][object]$AdapterRequest,
-    [Parameter(Mandatory = $true)][string]$AdapterName
+    [Parameter(Mandatory = $true)][string]$AdapterName,
+    [int]$TimeoutSec = 10
   )
 
   # This uses operator-provided HTTP endpoints for actual posting. No secrets are stored in-repo.
@@ -151,11 +189,35 @@ function Invoke-GrowthAutopilotHttpPublish {
   }
 
   try {
-    $resp = Invoke-RestMethod -Method Post -Uri $endpoint -Headers $headers -Body ($AdapterRequest | ConvertTo-Json -Depth 20)
-    $status = if ($null -ne $resp -and $resp.PSObject.Properties.Name -contains "status") { [string]$resp.status } else { "" }
-    if ($status -ne "published" -and $status -ne "queued") {
-      $status = "published"
+    $timeout = [int]([Math]::Max(1, $TimeoutSec))
+    $resp = Invoke-RestMethod -Method Post -Uri $endpoint -Headers $headers -Body ($AdapterRequest | ConvertTo-Json -Depth 20) -TimeoutSec $timeout
+
+    if ($null -eq $resp) {
+      return [pscustomobject]@{
+        status = "failed"
+        external_ref = ""
+        reason_codes = @("adapter_transport_http", "adapter_http_malformed_response")
+        error = "malformed_response"
+      }
     }
+
+    $status = ""
+    if ($resp -is [string]) {
+      $status = ""
+    }
+    elseif ($resp.PSObject.Properties.Name -contains "status") {
+      $status = [string]$resp.status
+    }
+
+    if ($status -ne "published" -and $status -ne "queued") {
+      return [pscustomobject]@{
+        status = "failed"
+        external_ref = ""
+        reason_codes = @("adapter_transport_http", "adapter_http_malformed_response")
+        error = "malformed_response"
+      }
+    }
+
     $ext = if ($null -ne $resp -and $resp.PSObject.Properties.Name -contains "external_ref") { [string]$resp.external_ref } else { "" }
     if ([string]::IsNullOrWhiteSpace($ext)) {
       $ext = "http:{0}:{1}" -f $AdapterName, (Get-StableHash -Value ("{0}|{1}" -f $endpoint, $AdapterRequest.request_id)).Substring(0, 12)
@@ -168,11 +230,16 @@ function Invoke-GrowthAutopilotHttpPublish {
     }
   }
   catch {
+    $isTimeout = $false
+    try { $isTimeout = Test-GrowthHttpTimeoutException -Exception $_.Exception } catch {}
+
+    $errCode = if ($isTimeout) { "timeout" } else { "http_exception" }
+    $reason = if ($isTimeout) { "adapter_http_timeout" } else { "adapter_http_exception" }
     return [pscustomobject]@{
       status = "failed"
       external_ref = ""
-      reason_codes = @("adapter_transport_http", "adapter_http_exception")
-      error = $_.Exception.Message
+      reason_codes = @("adapter_transport_http", $reason)
+      error = $errCode
     }
   }
 }
@@ -187,7 +254,8 @@ function Invoke-GrowthAutopilotAdapterPublish {
     [Parameter(Mandatory = $true)][object]$ActionRecord,
     [Parameter(Mandatory = $true)][object]$Policy,
     [Parameter(Mandatory = $true)][int]$MaxAttempts,
-    [int[]]$RetryScheduleMs = @(200)
+    [int[]]$RetryScheduleMs = @(200),
+    [int]$HttpTimeoutSec = 10
   )
 
   $policySnapshot = Get-GrowthAutopilotPolicySnapshot -Policy $Policy
@@ -205,13 +273,25 @@ function Invoke-GrowthAutopilotAdapterPublish {
   while ($attempt -lt $MaxAttempts) {
     $attempt++
     $last = if ($Transport -eq "http") {
-      Invoke-GrowthAutopilotHttpPublish -AdapterRequest $adapterRequest -AdapterName $AdapterName
+      Invoke-GrowthAutopilotHttpPublish -AdapterRequest $adapterRequest -AdapterName $AdapterName -TimeoutSec $HttpTimeoutSec
     } else {
       Invoke-GrowthAutopilotMockPublish -AdapterRequest $adapterRequest -Attempt $attempt -Channel $Channel
     }
 
     if ($null -ne $last -and ([string]$last.status -eq "published" -or [string]$last.status -eq "queued")) {
       break
+    }
+
+    if ($attempt -lt $MaxAttempts -and $null -ne $RetryScheduleMs -and @($RetryScheduleMs).Count -gt 0) {
+      $delay = 0
+      $idx = $attempt - 1
+      if ($idx -lt @($RetryScheduleMs).Count) {
+        $delay = [int]$RetryScheduleMs[$idx]
+      }
+      else {
+        $delay = [int]$RetryScheduleMs[@($RetryScheduleMs).Count - 1]
+      }
+      if ($delay -gt 0) { Start-Sleep -Milliseconds $delay }
     }
   }
 
@@ -228,6 +308,7 @@ function Invoke-GrowthAutopilotAdapterPublish {
   return [pscustomobject]@{
     adapter_request = $adapterRequest
     publish_receipt = [pscustomobject]@{
+      receipt_schema_version = $script:GrowthAutopilotReceiptSchemaVersion
       status = $status
       channel = $Channel
       adapter = $AdapterName

@@ -80,6 +80,12 @@ if (-not (Test-Path -Path $adapterLibPath -PathType Leaf)) {
 }
 . $adapterLibPath
 
+$ledgerLibPath = Join-Path $devScriptDir "..\\lib\\growth_autopilot_ledger.ps1"
+if (-not (Test-Path -Path $ledgerLibPath -PathType Leaf)) {
+  throw "Missing ledger library: $ledgerLibPath"
+}
+. $ledgerLibPath
+
 function Convert-ToLanguageCode {
   param([string]$Value)
   if ([string]::IsNullOrWhiteSpace($Value)) { return "en" }
@@ -491,6 +497,39 @@ function Get-DispatchPlan {
     $campaignSelfPromotionAllowed = [bool]$Campaign.self_promotion_allowed
   }
 
+  $httpTimeoutSec = 10
+  $tmpTimeout = 0
+  if ($Config.PSObject.Properties.Name -contains "adapter_http_timeout_sec" -and [int]::TryParse([string]$Config.adapter_http_timeout_sec, [ref]$tmpTimeout) -and $tmpTimeout -gt 0) {
+    $httpTimeoutSec = $tmpTimeout
+  }
+
+  $retryScheduleMs = @(200)
+  if ($Config.PSObject.Properties.Name -contains "adapter_retry_schedule_ms") {
+    $raw = $Config.adapter_retry_schedule_ms
+    $items = @()
+    if ($raw -is [System.Collections.IEnumerable] -and -not ($raw -is [string])) { $items = @($raw) } else { $items = @($raw) }
+
+    $parsed = New-Object System.Collections.Generic.List[int]
+    foreach ($v in @($items)) {
+      $tmp = 0
+      if ([int]::TryParse([string]$v, [ref]$tmp) -and $tmp -ge 0) { [void]$parsed.Add($tmp) }
+    }
+    if ($parsed.Count -gt 0) { $retryScheduleMs = @($parsed.ToArray()) }
+  }
+
+  $ledgerRetentionDays = 30
+  $tmpRet = 0
+  if ($Config.PSObject.Properties.Name -contains "publish_ledger_retention_days" -and [int]::TryParse([string]$Config.publish_ledger_retention_days, [ref]$tmpRet) -and $tmpRet -ge 0) {
+    $ledgerRetentionDays = $tmpRet
+  }
+  $ledgerMaxEntries = 5000
+  $tmpMax = 0
+  if ($Config.PSObject.Properties.Name -contains "publish_ledger_max_entries" -and [int]::TryParse([string]$Config.publish_ledger_max_entries, [ref]$tmpMax) -and $tmpMax -gt 0) {
+    $ledgerMaxEntries = $tmpMax
+  }
+
+  $firstSeenDayUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+
   foreach ($op in @($Opportunities)) {
     $channel = [string]$op.channel
     if (-not $channelCounts.ContainsKey($channel)) {
@@ -696,6 +735,7 @@ function Get-DispatchPlan {
         dedupe_key = $dedupeKey
         campaign_id = $campaignId
         run_signature = $RunSignature
+        first_seen_day_utc = $firstSeenDayUtc
         plan_id = [string]$record.plan_id
         channel = $channel
         adapter_request = $null
@@ -713,7 +753,9 @@ function Get-DispatchPlan {
       -Transport $PublishTransport `
       -ActionRecord $record `
       -Policy $policy `
-      -MaxAttempts 2
+      -MaxAttempts 2 `
+      -RetryScheduleMs $retryScheduleMs `
+      -HttpTimeoutSec $httpTimeoutSec
 
     if ($null -ne $adapterResult.adapter_request) { [void]$adapterRequests.Add($adapterResult.adapter_request) }
     if ($null -ne $adapterResult.publish_receipt) { [void]$publishReceipts.Add($adapterResult.publish_receipt) }
@@ -735,6 +777,7 @@ function Get-DispatchPlan {
         dedupe_key = $dedupeKey
         campaign_id = $campaignId
         run_signature = $RunSignature
+        first_seen_day_utc = $firstSeenDayUtc
         plan_id = [string]$record.plan_id
         channel = $channel
         adapter_request = $adapterResult.adapter_request
@@ -762,6 +805,7 @@ function Get-DispatchPlan {
       dedupe_key = $dedupeKey
       campaign_id = $campaignId
       run_signature = $RunSignature
+      first_seen_day_utc = $firstSeenDayUtc
       plan_id = [string]$record.plan_id
       channel = $channel
       adapter_request = $adapterResult.adapter_request
@@ -770,14 +814,24 @@ function Get-DispatchPlan {
     }
   }
 
+  $ledgerOut = @()
+  if ([string]$Mode -eq "live") {
+    $ledgerOut = Compact-GrowthPublishLedger -Entries @($ledgerIndex.Values) -CurrentRunSignature $RunSignature -RetentionDays $ledgerRetentionDays -MaxEntries $ledgerMaxEntries -Errors $errors
+  }
+  else {
+    $ledgerOut = @(
+      $ledgerIndex.Values |
+        Sort-Object -Property @{ Expression = { [string]$_.dedupe_key } }
+    )
+  }
+
   return [pscustomobject]@{
     posts = @($posts.ToArray())
     drafts = @($drafts.ToArray())
     adapter_requests = @($adapterRequests.ToArray())
     publish_receipts = @($publishReceipts.ToArray())
     publish_ledger = @(
-      $ledgerIndex.Values |
-        Sort-Object -Property @{ Expression = { [string]$_.dedupe_key } }
+      @($ledgerOut)
     )
     errors = @($errors.ToArray())
     budget_used_usd = [double]([Math]::Round($budgetUsed, 2))
