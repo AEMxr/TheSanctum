@@ -33,79 +33,72 @@ function Get-StableHash {
   }
 }
 
-function Read-HttpRequestDrain {
-  param([Parameter(Mandatory = $true)][System.IO.Stream]$Stream)
-
-  $buf = New-Object byte[] 4096
-  $ms = New-Object System.IO.MemoryStream
+function Get-FreeTcpPort {
+  $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $l.Start()
   try {
-    $headerText = ""
-    $headerEnd = -1
-    while ($true) {
-      $n = $Stream.Read($buf, 0, $buf.Length)
-      if ($n -le 0) { break }
-      $ms.Write($buf, 0, $n)
-      $text = [System.Text.Encoding]::ASCII.GetString($ms.ToArray())
-      $headerEnd = $text.IndexOf("`r`n`r`n")
-      if ($headerEnd -ge 0) {
-        $headerText = $text.Substring(0, $headerEnd + 4)
-        break
-      }
-      if ($ms.Length -gt 65536) { break }
-    }
-
-    if ($headerEnd -ge 0) {
-      $contentLength = 0
-      $m = [regex]::Match($headerText, '(?im)^Content-Length:\\s*(\\d+)')
-      if ($m.Success) { [void][int]::TryParse([string]$m.Groups[1].Value, [ref]$contentLength) }
-
-      $already = [int]($ms.Length - ($headerEnd + 4))
-      $remaining = $contentLength - $already
-      while ($remaining -gt 0) {
-        $toRead = [Math]::Min($buf.Length, $remaining)
-        $n2 = $Stream.Read($buf, 0, $toRead)
-        if ($n2 -le 0) { break }
-        $remaining -= $n2
-      }
-    }
+    return ([System.Net.IPEndPoint]$l.LocalEndpoint).Port
   }
   finally {
-    $ms.Dispose()
+    $l.Stop()
+  }
+}
+
+function Start-TestHttpListener {
+  param(
+    [string]$BindHost = "127.0.0.1",
+    [int]$MaxAttempts = 20
+  )
+
+  for ($i = 0; $i -lt $MaxAttempts; $i++) {
+    $port = Get-FreeTcpPort
+    $prefix = "http://{0}:{1}/" -f $BindHost, $port
+    $listener = [System.Net.HttpListener]::new()
+    $listener.Prefixes.Add($prefix)
+    try {
+      $listener.Start()
+      try { $listener.IgnoreWriteExceptions = $true } catch {}
+      return [pscustomobject]@{
+        listener = $listener
+        endpoint = $prefix
+      }
+    }
+    catch {
+      try { $listener.Close() } catch {}
+    }
+  }
+
+  throw "Unable to start HttpListener for test."
+}
+
+function Read-HttpRequestBody {
+  param([Parameter(Mandatory = $true)][System.Net.HttpListenerRequest]$Request)
+
+  try {
+    $sr = New-Object System.IO.StreamReader($Request.InputStream, $Request.ContentEncoding)
+    try { [void]$sr.ReadToEnd() } finally { $sr.Dispose() }
+  }
+  catch {
+    # best effort
   }
 }
 
 function Send-HttpResponse {
   param(
-    [Parameter(Mandatory = $true)][System.Net.Sockets.TcpClient]$Client,
+    [Parameter(Mandatory = $true)][System.Net.HttpListenerResponse]$Response,
     [Parameter(Mandatory = $true)][int]$StatusCode,
     [Parameter(Mandatory = $true)][string]$Body,
     [string]$ContentType = "application/json"
   )
 
-  $statusText = switch ($StatusCode) {
-    200 { "OK" }
-    500 { "Internal Server Error" }
-    default { "OK" }
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+  $Response.StatusCode = $StatusCode
+  $Response.ContentType = $ContentType
+  $Response.ContentLength64 = $bytes.Length
+  if ($bytes.Length -gt 0) {
+    $Response.OutputStream.Write($bytes, 0, $bytes.Length)
   }
-
-  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
-  $headers = @(
-    "HTTP/1.1 $StatusCode $statusText",
-    "Content-Type: $ContentType",
-    "Content-Length: $($bodyBytes.Length)",
-    "Connection: close",
-    "",
-    ""
-  ) -join "`r`n"
-  $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)
-
-  $stream = $Client.GetStream()
-  $stream.Write($headerBytes, 0, $headerBytes.Length)
-  if ($bodyBytes.Length -gt 0) {
-    $stream.Write($bodyBytes, 0, $bodyBytes.Length)
-  }
-  $stream.Flush()
-  $Client.Close()
+  $Response.OutputStream.Close()
 }
 
 function Invoke-AdapterPublishWithServerPlan {
@@ -117,16 +110,15 @@ function Invoke-AdapterPublishWithServerPlan {
     [int[]]$RetryScheduleMs = @(0)
   )
 
-  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-  $listener.Start()
-  $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
-  $endpoint = "http://127.0.0.1:$port/"
+  $server = Start-TestHttpListener
+  $endpoint = [string]$server.endpoint
 
   $job = Start-Job -ArgumentList @($LibPath, $endpoint, $MaxAttempts, $HttpTimeoutSec, @($RetryScheduleMs)) -ScriptBlock {
     param($InnerLibPath, $InnerEndpoint, $InnerMaxAttempts, $InnerTimeoutSec, $InnerRetrySchedule)
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
+    try { [System.Net.ServicePointManager]::Expect100Continue = $false } catch {}
 
     function Get-StableHash {
       param([Parameter(Mandatory = $true)][string]$Value)
@@ -181,12 +173,12 @@ function Invoke-AdapterPublishWithServerPlan {
 
   try {
     foreach ($step in @($ServerPlan)) {
-      $tcp = $listener.AcceptTcpClient()
-      Read-HttpRequestDrain -Stream $tcp.GetStream()
+      $ctx = $server.listener.GetContext()
+      Read-HttpRequestBody -Request $ctx.Request
 
       if ($step.type -eq "sleep_close") {
         Start-Sleep -Seconds ([int]$step.seconds)
-        try { $tcp.Close() } catch {}
+        try { $ctx.Response.Abort() } catch {}
         continue
       }
 
@@ -194,12 +186,12 @@ function Invoke-AdapterPublishWithServerPlan {
       $body = [string]$step.body
       $ct = [string]$step.content_type
       if ([string]::IsNullOrWhiteSpace($ct)) { $ct = "application/json" }
-      Send-HttpResponse -Client $tcp -StatusCode $code -Body $body -ContentType $ct
+      Send-HttpResponse -Response $ctx.Response -StatusCode $code -Body $body -ContentType $ct
     }
 
     Wait-Job -Job $job | Out-Null
     if ($job.State -ne "Completed") {
-      $err = Receive-Job -Job $job -ErrorAction SilentlyContinue
+      Receive-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
       throw "Client job failed."
     }
 
@@ -208,7 +200,8 @@ function Invoke-AdapterPublishWithServerPlan {
   }
   finally {
     try { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue } catch {}
-    try { $listener.Stop() } catch {}
+    try { $server.listener.Stop() } catch {}
+    try { $server.listener.Close() } catch {}
   }
 }
 
@@ -249,12 +242,7 @@ Describe "growth autopilot http adapter contracts" {
       @{ type = "response"; status = 200; body = '{"status":"published","external_ref":"ext-retry"}'; content_type = "application/json" }
     )
 
-    Assert-Equal -Actual ([string]$r.publish_receipt.status) -Expected "published" -Message (
-      "Receipt status mismatch. reasons={0} attempts={1} external_ref={2}" -f
-        ((@($r.publish_receipt.reason_codes) -join ",")),
-        ([int]$r.publish_receipt.attempt_count),
-        ([string]$r.publish_receipt.external_ref)
-    )
+    Assert-Equal -Actual ([string]$r.publish_receipt.status) -Expected "published" -Message "Receipt status mismatch."
     Assert-Equal -Actual ([string]$r.publish_receipt.external_ref) -Expected "ext-retry" -Message "external_ref mismatch."
     Assert-Equal -Actual ([int]$r.publish_receipt.attempt_count) -Expected 2 -Message "Expected retry attempt_count=2."
     Assert-Contains -Collection @($r.publish_receipt.reason_codes) -Value "adapter_http_publish_ok" -Message "Missing publish ok reason."
