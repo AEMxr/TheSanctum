@@ -2,25 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "growth_autopilot.test_env_utils.ps1")
-
-function Assert-True {
-  param([bool]$Condition, [string]$Message = "Assertion failed.")
-  if (-not $Condition) { throw $Message }
-}
-
-function Assert-Equal {
-  param($Actual, $Expected, [string]$Message = "Values are not equal.")
-  if ($Actual -ne $Expected) {
-    throw "$Message`nExpected: $Expected`nActual: $Actual"
-  }
-}
-
-function Assert-Contains {
-  param([object[]]$Collection, $Value, [string]$Message = "Collection missing value.")
-  if (-not ($Collection -contains $Value)) {
-    throw "$Message`nExpected value: $Value"
-  }
-}
+. (Join-Path $PSScriptRoot "growth_autopilot.test_assert_utils.ps1")
 
 function Write-JsonFile {
   param([string]$Path, [object]$Value)
