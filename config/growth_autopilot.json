@@ -1,0 +1,12 @@
+{
+  "delivery_mode": "tenant_only",
+  "cross_sell_allowed": false,
+  "safe_mode": false,
+  "global_emergency_stop": false,
+  "default_daily_budget": 90,
+  "default_max_posts_per_day": 6,
+  "utm_template": "utm_source={channel}&utm_medium=growth_autopilot&utm_campaign={campaign_id}&utm_content={language_code}-{creative_id}",
+  "compliance": {
+    "default_disclosure": "Sponsored content. Reply STOP to opt out."
+  }
+}
