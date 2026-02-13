@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "growth_autopilot.test_env_utils.ps1")
+
 function Assert-True {
   param([bool]$Condition, [string]$Message = "Assertion failed.")
   if (-not $Condition) { throw $Message }
@@ -40,10 +42,19 @@ function Invoke-AutopilotDryrun {
 
 Describe "growth autopilot discovery integration" {
   BeforeAll {
+    $script:GrowthEnvSnapshot = New-GrowthAutopilotTestEnvSnapshot
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
     $script:ScriptPath = Join-Path $script:RepoRoot "scripts\dev\start_growth_autopilot.ps1"
     $script:PowerShellExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
     Assert-True -Condition (Test-Path -Path $script:ScriptPath -PathType Leaf) -Message "Missing script: $script:ScriptPath"
+  }
+
+  AfterEach {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
+  }
+
+  AfterAll {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
   }
 
   It "produces deterministic discovery output and drafts unknown policy channels" {

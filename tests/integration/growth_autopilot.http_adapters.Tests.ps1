@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "growth_autopilot.test_env_utils.ps1")
+
 function Assert-True {
   param([bool]$Condition, [string]$Message = "Assertion failed.")
   if (-not $Condition) { throw $Message }
@@ -207,9 +209,18 @@ function Invoke-AdapterPublishWithServerPlan {
 
 Describe "growth autopilot http adapter contracts" {
   BeforeAll {
+    $script:GrowthEnvSnapshot = New-GrowthAutopilotTestEnvSnapshot
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
     $script:LibPath = Join-Path $script:RepoRoot "scripts\lib\growth_autopilot_adapters.ps1"
     Assert-True -Condition (Test-Path -Path $script:LibPath -PathType Leaf) -Message "Missing lib: $script:LibPath"
+  }
+
+  AfterEach {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
+  }
+
+  AfterAll {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
   }
 
   It "accepts published response envelope and emits schema version" {

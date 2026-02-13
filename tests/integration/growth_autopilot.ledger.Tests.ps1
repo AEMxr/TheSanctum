@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "growth_autopilot.test_env_utils.ps1")
+
 function Assert-True {
   param([bool]$Condition, [string]$Message = "Assertion failed.")
   if (-not $Condition) { throw $Message }
@@ -22,10 +24,19 @@ function Assert-Contains {
 
 Describe "growth autopilot publish ledger compaction" {
   BeforeAll {
+    $script:GrowthEnvSnapshot = New-GrowthAutopilotTestEnvSnapshot
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
     $script:LedgerLib = Join-Path $script:RepoRoot "scripts\lib\growth_autopilot_ledger.ps1"
     Assert-True -Condition (Test-Path -Path $script:LedgerLib -PathType Leaf) -Message "Missing ledger lib: $script:LedgerLib"
     . $script:LedgerLib
+  }
+
+  AfterEach {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
+  }
+
+  AfterAll {
+    Restore-GrowthAutopilotTestEnvSnapshot -Snapshot $script:GrowthEnvSnapshot
   }
 
   It "prunes entries older than retention cutoff when first_seen_day_utc is present" {
