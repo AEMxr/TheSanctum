@@ -74,24 +74,14 @@ Describe "growth autopilot secret redaction" {
     $endpoint = "http://127.0.0.1:$port/private"
     $apiKey = "supersecretkey"
 
-    $job = Start-Job -ArgumentList @($script:LibPath, $endpoint, $apiKey) -ScriptBlock {
-      param($InnerLibPath, $InnerEndpoint, $InnerApiKey)
+    $assertPath = Join-Path $PSScriptRoot "growth_autopilot.test_assert_utils.ps1"
+
+    $job = Start-Job -ArgumentList @($script:LibPath, $assertPath, $endpoint, $apiKey) -ScriptBlock {
+      param($InnerLibPath, $InnerAssertPath, $InnerEndpoint, $InnerApiKey)
       Set-StrictMode -Version Latest
       $ErrorActionPreference = "Stop"
 
-      function Get-StableHash {
-        param([Parameter(Mandatory = $true)][string]$Value)
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        try {
-          $hashBytes = $sha.ComputeHash($bytes)
-          return (($hashBytes | ForEach-Object { $_.ToString("x2") }) -join "")
-        }
-        finally {
-          $sha.Dispose()
-        }
-      }
-
+      . $InnerAssertPath
       . $InnerLibPath
 
       $env:SANCTUM_GROWTH_X_ENDPOINT = $InnerEndpoint
