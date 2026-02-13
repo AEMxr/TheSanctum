@@ -38,6 +38,17 @@ HTTP adapter environment variables:
   - `SANCTUM_GROWTH_DISCOURSE_ENDPOINT`
   - `SANCTUM_GROWTH_DISCOURSE_API_KEY` (optional)
 
+HTTP adapter contract expectations:
+- Endpoint must accept `POST` with JSON request body matching `growth_autopilot.adapter_requests.json` entries.
+- Endpoint must return JSON with:
+  - `status`: `published` or `queued`
+  - `external_ref` (optional; if omitted, the client will generate a deterministic reference)
+- Any non-`published|queued` or non-JSON response is treated as `failed` and routed to drafts (fail-closed).
+
+HTTP hardening knobs (in `config/growth_autopilot.json`):
+- `adapter_http_timeout_sec`: per-request timeout (seconds).
+- `adapter_retry_schedule_ms`: deterministic retry delay schedule (milliseconds) for transient failures.
+
 ## One-command start
 Dryrun:
 ```powershell
@@ -94,6 +105,14 @@ Run state snapshot:
 Idempotency ledger (prevents duplicate adapter attempts for the same run signature):
 - `data/growth/state/publish_ledger.<campaign_id>.json`
 
+Publish receipts:
+- Each receipt includes `receipt_schema_version` (current: `v1.0.0`) plus `status`, `external_ref`, `reason_codes`, `policy_snapshot`, and `attempt_count`.
+- Receipts and adapter requests are designed to avoid leaking secrets (no endpoints or API keys).
+
+Ledger retention/compaction:
+- `publish_ledger_retention_days`: drop entries older than cutoff when `first_seen_day_utc` is present.
+- `publish_ledger_max_entries`: cap ledger growth deterministically while retaining current-run entries.
+
 ## Safety and kill switches
 - `global_emergency_stop=true` in config forces draft-only behavior.
 - `safe_mode=true` in config forces draft-only behavior.
@@ -110,6 +129,8 @@ Idempotency ledger (prevents duplicate adapter attempts for the same run signatu
   inspect `reason_codes` in `growth_autopilot.drafts.json`.
 - HTTP transport fails with `adapter_http_endpoint_missing`:
   set the required `SANCTUM_GROWTH_*_ENDPOINT` environment variable(s) or use `-PublishTransport mock`.
+- HTTP transport fails with `adapter_http_timeout`:
+  increase `adapter_http_timeout_sec` or fix upstream endpoint responsiveness.
 
 ## Rollback
 - Stop usage of the script and switch to dryrun:
