@@ -22,5 +22,6 @@
   "max_posts_per_day": 4,
   "cost_per_post_usd": 3,
   "estimated_sale_value_usd": 120,
-  "landing_url": "https://example.com/pilot"
+  "landing_url": "https://example.com/pilot",
+  "self_promotion_allowed": true
 }

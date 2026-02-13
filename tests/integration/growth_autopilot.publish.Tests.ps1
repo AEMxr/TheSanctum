@@ -44,8 +44,10 @@ Describe "growth autopilot publish integration" {
     $config = [pscustomobject]@{
       delivery_mode = "tenant_only"
       cross_sell_allowed = $false
+      self_promotion_mode = "explicit_only"
       safe_mode = $false
       global_emergency_stop = $false
+      publish_transport_default = "mock"
       default_daily_budget = 40
       default_max_posts_per_day = 3
       utm_template = "utm_source={channel}&utm_medium=growth_autopilot&utm_campaign={campaign_id}&utm_content={language_code}-{creative_id}"
@@ -64,6 +66,7 @@ Describe "growth autopilot publish integration" {
       cost_per_post_usd = 3
       estimated_sale_value_usd = 100
       landing_url = "https://example.com/pilot"
+      self_promotion_allowed = $true
     }
 
     $configPath = Join-Path $runRoot "config.json"
@@ -89,12 +92,23 @@ Describe "growth autopilot publish integration" {
 
       $posts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.posts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
       $drafts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.drafts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $requests = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.adapter_requests.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $receipts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.publish_receipts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
       Assert-True -Condition ($posts.Count -gt 0) -Message "Live publish run should emit at least one auto-published action."
       Assert-True -Condition ($posts.Count -le 2) -Message "Live publish run must respect MaxPostsPerDay cap."
+      Assert-Equal -Actual $requests.Count -Expected $posts.Count -Message "Adapter requests should be emitted for each published action."
+      Assert-Equal -Actual $receipts.Count -Expected $posts.Count -Message "Publish receipts should be emitted for each published action."
 
       foreach ($post in $posts) {
         Assert-Equal -Actual ([string]$post.channel) -Expected "x" -Message "Only allowlisted autopost channel should publish in this fixture."
         Assert-Contains -Collection @($post.reason_codes) -Value "autopost_allowed" -Message "Published actions must carry autopost_allowed reason."
+      }
+
+      foreach ($r in $receipts) {
+        Assert-Equal -Actual ([string]$r.channel) -Expected "x" -Message "Receipt channel should match published action channel."
+        Assert-True -Condition (([string]$r.status -eq "published") -or ([string]$r.status -eq "queued")) -Message "Receipt status must be published or queued."
+        Assert-True -Condition ([int]$r.attempt_count -ge 1) -Message "Receipt attempt_count must be >= 1."
+        Assert-True -Condition ([bool]$r.policy_snapshot.known) -Message "Receipt must include policy_snapshot."
       }
 
       $redditDraft = @($drafts | Where-Object { $_.channel -eq "reddit" } | Select-Object -First 1)
@@ -117,8 +131,10 @@ Describe "growth autopilot publish integration" {
     $config = [pscustomobject]@{
       delivery_mode = "tenant_only"
       cross_sell_allowed = $false
+      self_promotion_mode = "explicit_only"
       safe_mode = $true
       global_emergency_stop = $false
+      publish_transport_default = "mock"
       default_daily_budget = 40
       default_max_posts_per_day = 3
       utm_template = "utm_source={channel}&utm_medium=growth_autopilot&utm_campaign={campaign_id}&utm_content={language_code}-{creative_id}"
@@ -137,6 +153,7 @@ Describe "growth autopilot publish integration" {
       cost_per_post_usd = 3
       estimated_sale_value_usd = 100
       landing_url = "https://example.com/pilot"
+      self_promotion_allowed = $true
     }
 
     $configPath = Join-Path $runRoot "config.json"
@@ -160,11 +177,90 @@ Describe "growth autopilot publish integration" {
 
       $posts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.posts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
       $drafts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.drafts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $requests = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.adapter_requests.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $receipts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.publish_receipts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
       Assert-Equal -Actual $posts.Count -Expected 0 -Message "Safe mode must block all auto-publishing."
+      Assert-Equal -Actual $requests.Count -Expected 0 -Message "Safe mode must block adapter execution."
+      Assert-Equal -Actual $receipts.Count -Expected 0 -Message "Safe mode must not emit publish receipts."
       Assert-True -Condition ($drafts.Count -gt 0) -Message "Safe mode should still produce drafts."
       Assert-Contains -Collection @($drafts[0].reason_codes) -Value "safe_mode_forced_draft" -Message "Safe mode draft should include safe_mode_forced_draft reason."
     }
     finally {
+      Remove-Item -Path $runRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  It "adapter failure falls back to draft-only with failed receipt" {
+    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("growth_publish_fail_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
+
+    $config = [pscustomobject]@{
+      delivery_mode = "tenant_only"
+      cross_sell_allowed = $false
+      self_promotion_mode = "explicit_only"
+      safe_mode = $false
+      global_emergency_stop = $false
+      publish_transport_default = "mock"
+      default_daily_budget = 40
+      default_max_posts_per_day = 3
+      utm_template = "utm_source={channel}&utm_medium=growth_autopilot&utm_campaign={campaign_id}&utm_content={language_code}-{creative_id}"
+      compliance = [pscustomobject]@{
+        default_disclosure = "Sponsored content. Reply STOP to opt out."
+      }
+    }
+    $campaign = [pscustomobject]@{
+      campaign_id = "publish-fail-test"
+      keywords = @("lead response automation")
+      target_languages = @("en")
+      discovery_seed_channels = @("x")
+      tone = "professional"
+      daily_budget_usd = 20
+      max_posts_per_day = 2
+      cost_per_post_usd = 3
+      estimated_sale_value_usd = 100
+      landing_url = "https://example.com/pilot"
+      self_promotion_allowed = $true
+    }
+
+    $configPath = Join-Path $runRoot "config.json"
+    $campaignPath = Join-Path $runRoot "campaign.json"
+    Write-JsonFile -Path $configPath -Value $config
+    Write-JsonFile -Path $campaignPath -Value $campaign
+
+    $oldFail = $env:SANCTUM_GROWTH_MOCK_FAIL_CHANNELS
+    $env:SANCTUM_GROWTH_MOCK_FAIL_CHANNELS = "x"
+
+    try {
+      $output = & $script:PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $script:ScriptPath `
+        -Mode live `
+        -PublishTransport mock `
+        -CampaignId "publish-fail-test" `
+        -Languages "en" `
+        -ConfigPath $configPath `
+        -CampaignPath $campaignPath `
+        -AllowlistPath (Join-Path $script:RepoRoot "data\growth\allowlist.json") `
+        -ArtifactsDir (Join-Path $runRoot "artifacts") `
+        -StateDir (Join-Path $runRoot "state") `
+        -LandingUrl "https://example.com/pilot" 2>&1
+      $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+      Assert-Equal -Actual $exitCode -Expected 0 -Message "Live publish failure fixture should still exit 0 (draft fallback)."
+
+      $posts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.posts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $drafts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.drafts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $requests = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.adapter_requests.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+      $receipts = @((Get-Content -Path (Join-Path $runRoot "artifacts\growth_autopilot.publish_receipts.json") -Raw -Encoding UTF8 | ConvertFrom-Json))
+
+      Assert-Equal -Actual $posts.Count -Expected 0 -Message "Adapter failure should prevent published actions."
+      Assert-Equal -Actual $requests.Count -Expected 1 -Message "Adapter request should be emitted for the failed publish attempt."
+      Assert-Equal -Actual $receipts.Count -Expected 1 -Message "Publish receipt should be emitted for the failed publish attempt."
+      Assert-Equal -Actual ([string]$receipts[0].status) -Expected "failed" -Message "Receipt status should be failed."
+
+      $xDraft = @($drafts | Where-Object { $_.channel -eq "x" } | Select-Object -First 1)
+      Assert-True -Condition ($xDraft.Count -eq 1) -Message "x should be present in draft queue on failure."
+      Assert-Contains -Collection @($xDraft[0].reason_codes) -Value "adapter_publish_failed" -Message "Draft fallback should include adapter_publish_failed reason."
+    }
+    finally {
+      $env:SANCTUM_GROWTH_MOCK_FAIL_CHANNELS = $oldFail
       Remove-Item -Path $runRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
   }

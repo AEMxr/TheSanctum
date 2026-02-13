@@ -44,7 +44,9 @@ Describe "growth autopilot smoke" {
         "growth_autopilot.posts.json",
         "growth_autopilot.drafts.json",
         "growth_autopilot.metrics.json",
-        "growth_autopilot.errors.json"
+        "growth_autopilot.errors.json",
+        "growth_autopilot.adapter_requests.json",
+        "growth_autopilot.publish_receipts.json"
       )
       foreach ($name in $requiredArtifacts) {
         $path = Join-Path $artifactDir $name
@@ -59,9 +61,17 @@ Describe "growth autopilot smoke" {
 
       $draftsRaw = Get-Content -Path (Join-Path $artifactDir "growth_autopilot.drafts.json") -Raw -Encoding UTF8 | ConvertFrom-Json
       $drafts = @($draftsRaw)
+
+      $requestsRaw = Get-Content -Path (Join-Path $artifactDir "growth_autopilot.adapter_requests.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+      $requests = @($requestsRaw)
+
+      $receiptsRaw = Get-Content -Path (Join-Path $artifactDir "growth_autopilot.publish_receipts.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+      $receipts = @($receiptsRaw)
       Assert-Equal -Actual ([string]$summary.verdict) -Expected "PASS" -Message "Smoke summary verdict should be PASS."
       Assert-Equal -Actual ([string]$summary.mode) -Expected "dryrun" -Message "Smoke summary mode should be dryrun."
       Assert-Equal -Actual $posts.Count -Expected 0 -Message "Dryrun must not auto-publish."
+      Assert-Equal -Actual $requests.Count -Expected 0 -Message "Dryrun must not execute adapters."
+      Assert-Equal -Actual $receipts.Count -Expected 0 -Message "Dryrun must not emit publish receipts."
       Assert-True -Condition ($drafts.Count -gt 0) -Message "Dryrun should generate draft queue."
     }
     finally {
