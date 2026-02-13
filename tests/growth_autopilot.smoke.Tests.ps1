@@ -1,17 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Assert-True {
-  param([bool]$Condition, [string]$Message = "Assertion failed.")
-  if (-not $Condition) { throw $Message }
-}
-
-function Assert-Equal {
-  param($Actual, $Expected, [string]$Message = "Values are not equal.")
-  if ($Actual -ne $Expected) {
-    throw "$Message`nExpected: $Expected`nActual: $Actual"
-  }
-}
+. (Join-Path $PSScriptRoot "integration/growth_autopilot.test_assert_utils.ps1")
 
 Describe "growth autopilot smoke" {
   BeforeAll {
