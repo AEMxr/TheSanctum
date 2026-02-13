@@ -1,5 +1,6 @@
 param(
   [ValidateSet("dryrun", "live")][string]$Mode = "dryrun",
+  [ValidateSet("", "mock", "http")][string]$PublishTransport = "",
   [string]$CampaignId = "sample",
   [string]$Languages = "all",
   [double]$DailyBudget = 0,
@@ -40,6 +41,24 @@ function Read-JsonFile {
   }
 }
 
+function Read-OptionalJsonArrayFile {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  if (-not (Test-Path -Path $Path -PathType Leaf)) {
+    return @()
+  }
+
+  try {
+    $raw = Get-Content -Path $Path -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+    $obj = $raw | ConvertFrom-Json
+    return @($obj)
+  }
+  catch {
+    return @()
+  }
+}
+
 function Get-StableHash {
   param([Parameter(Mandatory = $true)][string]$Value)
   $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -52,6 +71,14 @@ function Get-StableHash {
     $sha.Dispose()
   }
 }
+
+# Phase 2: adapter contract + channel bindings.
+$devScriptDir = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $PSScriptRoot } elseif (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+$adapterLibPath = Join-Path $devScriptDir "..\\lib\\growth_autopilot_adapters.ps1"
+if (-not (Test-Path -Path $adapterLibPath -PathType Leaf)) {
+  throw "Missing adapter library: $adapterLibPath"
+}
+. $adapterLibPath
 
 function Convert-ToLanguageCode {
   param([string]$Value)
@@ -397,10 +424,13 @@ function New-ActionRecord {
 function Get-DispatchPlan {
   param(
     [Parameter(Mandatory = $true)][string]$Mode,
+    [Parameter(Mandatory = $true)][string]$PublishTransport,
     [Parameter(Mandatory = $true)][bool]$SafeMode,
     [Parameter(Mandatory = $true)][object]$Config,
     [Parameter(Mandatory = $true)][object]$Campaign,
-    [Parameter(Mandatory = $true)][object[]]$Opportunities,
+    [Parameter(Mandatory = $true)][string]$RunSignature,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Opportunities,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$ExistingPublishLedger,
     [Parameter(Mandatory = $true)][double]$DailyBudget,
     [Parameter(Mandatory = $true)][int]$MaxPostsPerDay,
     [Parameter(Mandatory = $true)][string]$LandingUrl
@@ -426,6 +456,8 @@ function Get-DispatchPlan {
 
   $posts = New-Object System.Collections.Generic.List[object]
   $drafts = New-Object System.Collections.Generic.List[object]
+  $adapterRequests = New-Object System.Collections.Generic.List[object]
+  $publishReceipts = New-Object System.Collections.Generic.List[object]
   $errors = New-Object System.Collections.Generic.List[object]
   $channelCounts = @{}
   $postedCount = 0
@@ -434,6 +466,29 @@ function Get-DispatchPlan {
   $tmpCost = 0.0
   if ([double]::TryParse([string]$Campaign.cost_per_post_usd, [ref]$tmpCost) -and $tmpCost -gt 0) {
     $costPerPost = $tmpCost
+  }
+
+  $registry = Get-GrowthAutopilotAdapterRegistry
+
+  $ledgerIndex = @{}
+  foreach ($entry in @($ExistingPublishLedger)) {
+    if ($null -eq $entry) { continue }
+    $k = [string]$entry.dedupe_key
+    if (-not [string]::IsNullOrWhiteSpace($k)) {
+      $ledgerIndex[$k] = $entry
+    }
+  }
+
+  $selfPromotionMode = "explicit_only"
+  if ($Config.PSObject.Properties.Name -contains "self_promotion_mode") {
+    $selfPromotionMode = [string]$Config.self_promotion_mode
+  }
+  if ([string]::IsNullOrWhiteSpace($selfPromotionMode)) { $selfPromotionMode = "explicit_only" }
+  $selfPromotionMode = $selfPromotionMode.Trim().ToLowerInvariant()
+
+  $campaignSelfPromotionAllowed = $false
+  if ($Campaign.PSObject.Properties.Name -contains "self_promotion_allowed") {
+    $campaignSelfPromotionAllowed = [bool]$Campaign.self_promotion_allowed
   }
 
   foreach ($op in @($Opportunities)) {
@@ -457,6 +512,9 @@ function Get-DispatchPlan {
       [void]$reasonCodes.Add("dryrun_mode")
       if ($SafeMode) {
         [void]$reasonCodes.Add("safe_mode_forced_draft")
+      }
+      elseif ($selfPromotionMode -eq "explicit_only" -and -not $campaignSelfPromotionAllowed) {
+        [void]$reasonCodes.Add("self_promotion_explicit_only")
       }
       elseif (-not [bool]$policy.known) {
         [void]$reasonCodes.Add("policy_unknown_draft_only")
@@ -490,6 +548,21 @@ function Get-DispatchPlan {
         -LandingUrl $LandingUrl `
         -UtmTemplate $utmTemplate `
         -ReasonCodes @("safe_mode_forced_draft") `
+        -Status "queued_for_review" `
+        -ExecutionMode "draft_only" `
+        -Disclosures $requiredDisclosures
+      [void]$drafts.Add($record)
+      continue
+    }
+
+    if ($selfPromotionMode -eq "explicit_only" -and -not $campaignSelfPromotionAllowed) {
+      $record = New-ActionRecord `
+        -Opportunity $op `
+        -Localization $localization `
+        -CampaignId $campaignId `
+        -LandingUrl $LandingUrl `
+        -UtmTemplate $utmTemplate `
+        -ReasonCodes @("self_promotion_explicit_only") `
         -Status "queued_for_review" `
         -ExecutionMode "draft_only" `
         -Disclosures $requiredDisclosures
@@ -573,25 +646,139 @@ function Get-DispatchPlan {
       continue
     }
 
+    # Eligible for live adapter execution (policy known + allowlisted + not safe mode + within caps).
     $record = New-ActionRecord `
       -Opportunity $op `
       -Localization $localization `
       -CampaignId $campaignId `
       -LandingUrl $LandingUrl `
       -UtmTemplate $utmTemplate `
-      -ReasonCodes @("autopost_allowed") `
+      -ReasonCodes @("autopost_allowed", "adapter_executed") `
       -Status "published" `
       -ExecutionMode "live_autopost" `
       -Disclosures $requiredDisclosures
+
+    $dedupeKey = "{0}|{1}|{2}|{3}" -f $campaignId, $RunSignature, ([string]$record.plan_id), $channel
+    if ($ledgerIndex.ContainsKey($dedupeKey)) {
+      $replay = $ledgerIndex[$dedupeKey]
+      if ($null -ne $replay.adapter_request) { [void]$adapterRequests.Add($replay.adapter_request) }
+      if ($null -ne $replay.publish_receipt) { [void]$publishReceipts.Add($replay.publish_receipt) }
+      $ar = $replay.action_record
+      if ($null -ne $ar -and [string]$ar.status -eq "published") {
+        [void]$posts.Add($ar)
+        $postedCount++
+        $channelCounts[$channel] = [int]$channelCounts[$channel] + 1
+        $budgetUsed += $costPerPost
+      }
+      elseif ($null -ne $ar) {
+        [void]$drafts.Add($ar)
+      }
+      continue
+    }
+
+    $adapterName = ""
+    if ($registry.ContainsKey($channel)) {
+      $adapterName = [string]$registry[$channel]
+    }
+    if ([string]::IsNullOrWhiteSpace($adapterName)) {
+      $fallback = New-ActionRecord `
+        -Opportunity $op `
+        -Localization $localization `
+        -CampaignId $campaignId `
+        -LandingUrl $LandingUrl `
+        -UtmTemplate $utmTemplate `
+        -ReasonCodes @("adapter_not_registered") `
+        -Status "queued_for_review" `
+        -ExecutionMode "draft_only" `
+        -Disclosures $requiredDisclosures
+      [void]$drafts.Add($fallback)
+      $ledgerIndex[$dedupeKey] = [pscustomobject]@{
+        dedupe_key = $dedupeKey
+        campaign_id = $campaignId
+        run_signature = $RunSignature
+        plan_id = [string]$record.plan_id
+        channel = $channel
+        adapter_request = $null
+        publish_receipt = $null
+        action_record = $fallback
+      }
+      continue
+    }
+
+    $adapterResult = Invoke-GrowthAutopilotAdapterPublish `
+      -CampaignId $campaignId `
+      -RunSignature $RunSignature `
+      -Channel $channel `
+      -AdapterName $adapterName `
+      -Transport $PublishTransport `
+      -ActionRecord $record `
+      -Policy $policy `
+      -MaxAttempts 2
+
+    if ($null -ne $adapterResult.adapter_request) { [void]$adapterRequests.Add($adapterResult.adapter_request) }
+    if ($null -ne $adapterResult.publish_receipt) { [void]$publishReceipts.Add($adapterResult.publish_receipt) }
+
+    if ($null -ne $adapterResult.publish_receipt -and [string]$adapterResult.publish_receipt.status -eq "failed") {
+      $fallback = New-ActionRecord `
+        -Opportunity $op `
+        -Localization $localization `
+        -CampaignId $campaignId `
+        -LandingUrl $LandingUrl `
+        -UtmTemplate $utmTemplate `
+        -ReasonCodes @("autopost_allowed", "adapter_publish_failed") `
+        -Status "queued_for_review" `
+        -ExecutionMode "draft_only" `
+        -Disclosures $requiredDisclosures
+      [void]$drafts.Add($fallback)
+
+      $ledgerIndex[$dedupeKey] = [pscustomobject]@{
+        dedupe_key = $dedupeKey
+        campaign_id = $campaignId
+        run_signature = $RunSignature
+        plan_id = [string]$record.plan_id
+        channel = $channel
+        adapter_request = $adapterResult.adapter_request
+        publish_receipt = $adapterResult.publish_receipt
+        action_record = $fallback
+      }
+      continue
+    }
+
+    # Attach adapter receipt summary to the published action record (backward compatible extra fields).
+    if ($null -ne $adapterResult.publish_receipt) {
+      $record | Add-Member -NotePropertyName adapter_status -NotePropertyValue ([string]$adapterResult.publish_receipt.status) -Force
+      $record | Add-Member -NotePropertyName adapter_external_ref -NotePropertyValue ([string]$adapterResult.publish_receipt.external_ref) -Force
+      $record | Add-Member -NotePropertyName adapter_attempt_count -NotePropertyValue ([int]$adapterResult.publish_receipt.attempt_count) -Force
+    }
+    $record | Add-Member -NotePropertyName adapter -NotePropertyValue $adapterName -Force
+    $record | Add-Member -NotePropertyName publish_transport -NotePropertyValue $PublishTransport -Force
+
     [void]$posts.Add($record)
     $postedCount++
     $channelCounts[$channel] = [int]$channelCounts[$channel] + 1
     $budgetUsed += $costPerPost
+
+    $ledgerIndex[$dedupeKey] = [pscustomobject]@{
+      dedupe_key = $dedupeKey
+      campaign_id = $campaignId
+      run_signature = $RunSignature
+      plan_id = [string]$record.plan_id
+      channel = $channel
+      adapter_request = $adapterResult.adapter_request
+      publish_receipt = $adapterResult.publish_receipt
+      action_record = $record
+    }
   }
 
   return [pscustomobject]@{
     posts = @($posts.ToArray())
     drafts = @($drafts.ToArray())
+    adapter_requests = @($adapterRequests.ToArray())
+    publish_receipts = @($publishReceipts.ToArray())
+    publish_ledger = @(
+      $ledgerIndex.Values |
+        Sort-Object -Property @{ Expression = { [string]$_.dedupe_key } }
+    )
     errors = @($errors.ToArray())
     budget_used_usd = [double]([Math]::Round($budgetUsed, 2))
     cost_per_post_usd = [double]([Math]::Round($costPerPost, 2))
@@ -781,14 +968,41 @@ try {
     })
   }
 
+  $resolvedTransport = $PublishTransport
+  if ([string]::IsNullOrWhiteSpace($resolvedTransport)) {
+    if ($config.PSObject.Properties.Name -contains "publish_transport_default") {
+      $resolvedTransport = [string]$config.publish_transport_default
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($resolvedTransport)) { $resolvedTransport = "mock" }
+  $resolvedTransport = $resolvedTransport.Trim().ToLowerInvariant()
+  if ($resolvedTransport -ne "mock" -and $resolvedTransport -ne "http") { $resolvedTransport = "mock" }
+
   $languageSet = Get-LanguageSet -RawLanguages $Languages -Campaign $campaign
+
+  $runSignature = (Get-StableHash -Value ("{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f `
+      [string]$campaign.campaign_id, `
+      $Mode, `
+      $resolvedTransport, `
+      ($languageSet -join ","), `
+      $DailyBudget, `
+      $MaxPostsPerDay, `
+      $LandingUrl, `
+      [string]$safeMode)).Substring(0, 16)
+
+  $ledgerPath = Join-Path $StateDir ("publish_ledger.{0}.json" -f ([string]$campaign.campaign_id))
+  $existingLedger = @(Read-OptionalJsonArrayFile -Path $ledgerPath)
+
   $opportunities = Get-Opportunities -Campaign $campaign -Allowlist $allowlist -LanguageCodes $languageSet
   $plan = Get-DispatchPlan `
     -Mode $Mode `
+    -PublishTransport $resolvedTransport `
     -SafeMode $safeMode `
     -Config $config `
     -Campaign $campaign `
+    -RunSignature $runSignature `
     -Opportunities $opportunities `
+    -ExistingPublishLedger $existingLedger `
     -DailyBudget $DailyBudget `
     -MaxPostsPerDay $MaxPostsPerDay `
     -LandingUrl $LandingUrl
@@ -798,15 +1012,6 @@ try {
   }
 
   $metrics = Get-Metrics -Campaign $campaign -Posts $plan.posts -Drafts $plan.drafts
-
-  $runSignature = (Get-StableHash -Value ("{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f `
-      [string]$campaign.campaign_id, `
-      $Mode, `
-      ($languageSet -join ","), `
-      $DailyBudget, `
-      $MaxPostsPerDay, `
-      $LandingUrl, `
-      [string]$safeMode)).Substring(0, 16)
 
   $nextActions = New-Object System.Collections.Generic.List[string]
   if (@($plan.drafts).Count -gt 0) {
@@ -830,6 +1035,7 @@ try {
     delivery_mode = [string]$config.delivery_mode
     cross_sell_allowed = [bool]$config.cross_sell_allowed
     run_signature = $runSignature
+    publish_transport = $resolvedTransport
     language_codes = @($languageSet)
     landing_url = $LandingUrl
     daily_budget_usd = [double]([Math]::Round($DailyBudget, 2))
@@ -837,6 +1043,8 @@ try {
     discovery_count = @($opportunities).Count
     posts_count = @($plan.posts).Count
     drafts_count = @($plan.drafts).Count
+    adapter_requests_count = @($plan.adapter_requests).Count
+    publish_receipts_count = @($plan.publish_receipts).Count
     budget_used_usd = [double]([Math]::Round($plan.budget_used_usd, 2))
     metrics = $metrics.totals
     next_actions = @($nextActions.ToArray())
@@ -850,17 +1058,23 @@ try {
   $draftsPath = Join-Path $ArtifactsDir "growth_autopilot.drafts.json"
   $metricsPath = Join-Path $ArtifactsDir "growth_autopilot.metrics.json"
   $errorsPath = Join-Path $ArtifactsDir "growth_autopilot.errors.json"
+  $adapterRequestsPath = Join-Path $ArtifactsDir "growth_autopilot.adapter_requests.json"
+  $publishReceiptsPath = Join-Path $ArtifactsDir "growth_autopilot.publish_receipts.json"
   $statePath = Join-Path $StateDir ("{0}.{1}.json" -f ([string]$campaign.campaign_id), $runSignature)
 
   Save-Json -Path $summaryPath -Value $summary
   Save-Json -Path $postsPath -Value @($plan.posts)
   Save-Json -Path $draftsPath -Value @($plan.drafts)
   Save-Json -Path $metricsPath -Value $metrics
+  Save-Json -Path $adapterRequestsPath -Value @($plan.adapter_requests)
+  Save-Json -Path $publishReceiptsPath -Value @($plan.publish_receipts)
   Save-Json -Path $errorsPath -Value @($errors.ToArray())
+  Save-Json -Path $ledgerPath -Value @($plan.publish_ledger)
   Save-Json -Path $statePath -Value ([pscustomobject]@{
     campaign_id = [string]$campaign.campaign_id
     run_signature = $runSignature
     mode = $Mode
+    publish_transport = $resolvedTransport
     safe_mode = $safeMode
     posts_count = @($plan.posts).Count
     drafts_count = @($plan.drafts).Count
@@ -869,7 +1083,10 @@ try {
       posts = $postsPath
       drafts = $draftsPath
       metrics = $metricsPath
+      adapter_requests = $adapterRequestsPath
+      publish_receipts = $publishReceiptsPath
       errors = $errorsPath
+      publish_ledger = $ledgerPath
     }
   })
 
