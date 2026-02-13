@@ -65,7 +65,7 @@ function Test-GrowthHttpTimeoutException {
   }
 
   $msg = [string]$Exception.Message
-  if ($msg -match '(?i)time(d)?\\s*out|timeout') { return $true }
+  if ($msg -match '(?i)time(d)?\\s*out|timeout|cancell?ed|operation\\s+was\\s+cancell?ed|task\\s+was\\s+cancell?ed') { return $true }
   return $false
 }
 

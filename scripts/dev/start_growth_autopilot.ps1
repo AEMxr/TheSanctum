@@ -830,9 +830,7 @@ function Get-DispatchPlan {
     drafts = @($drafts.ToArray())
     adapter_requests = @($adapterRequests.ToArray())
     publish_receipts = @($publishReceipts.ToArray())
-    publish_ledger = @(
-      @($ledgerOut)
-    )
+    publish_ledger = @($ledgerOut)
     errors = @($errors.ToArray())
     budget_used_usd = [double]([Math]::Round($budgetUsed, 2))
     cost_per_post_usd = [double]([Math]::Round($costPerPost, 2))
